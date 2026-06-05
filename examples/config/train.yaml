@@ -38,6 +38,12 @@ eval_steps: 100                                 # eval cadence (only used when v
 preprocessing_num_workers: 8                    # parallel tokenization workers (matches the original)
 seed: 42
 
+# --- Experiment tracking (off by default so a fresh clone / CI never blocks on a W&B login) ---
+report_to: none                                 # none | wandb. Set to wandb to enable Weights & Biases.
+run_name: null                                  # tracker run name; null = basename of output_dir
+wandb_project: null                             # W&B project (or set the WANDB_PROJECT env var); only used when report_to=wandb
+wandb_entity: null                              # W&B entity/team (or set the WANDB_ENTITY env var); only used when report_to=wandb
+
 # --- Smoke-run knobs (defaults = full run; override for a quick pipeline check) ---
 max_steps: -1                                   # -1 = run the full num_train_epochs; e.g. 20 for a smoke run
 max_train_samples: null                         # null = full corpus; e.g. 4000 to subsample for a smoke run

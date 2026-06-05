@@ -77,6 +77,9 @@ mkdir -p "${SAVE}"
 echo "output_dir: ${SAVE}"
 
 # --- Launch: accelerate + DeepSpeed ZeRO-2, one process per GPU; grad-accum keeps GBS fixed ---
+# `tee` mirrors the research repo (scripts/train.sh): a full copy of the run log lands inside the
+# output dir as log.txt (the "Running training" summary, model structure, samples, losses). pipefail
+# is set above, so a launch failure still fails the job even though tee is the last pipe stage.
 uv run --no-sync --offline accelerate launch \
     --num_machines "${SLURM_JOB_NUM_NODES:-1}" \
     --num_processes "${N_GPUS}" \
@@ -84,7 +87,7 @@ uv run --no-sync --offline accelerate launch \
     -m examples.train --config examples/config/train.yaml \
     --override per_device_train_batch_size="${MBS}" \
     --override gradient_accumulation_steps="${GA}" \
-    --override output_dir="${SAVE}"
+    --override output_dir="${SAVE}" 2>&1 | tee "${SAVE}/log.txt"
 
 # Single-GPU variant (no accelerate/deepspeed; train.yaml already encodes GBS 128 = 16 x 8):
-#   uv run --no-sync --offline python -m examples.train --config examples/config/train.yaml
+#   uv run --no-sync --offline python -m examples.train --config examples/config/train.yaml 2>&1 | tee "${SAVE}/log.txt"

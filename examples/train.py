@@ -27,6 +27,9 @@ The training file is JSONL with a ``text`` field per line (pre-training format).
 from __future__ import annotations
 
 import argparse
+import json
+import logging
+import os
 import pathlib
 import sys
 
@@ -37,6 +40,57 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import gadra  # noqa: E402, F401  (registers the "gadra" method with peft)
 from examples import load_run_config  # noqa: E402
 from gadra import GaDRAConfig  # noqa: E402
+
+logger = logging.getLogger("gadra.train")
+
+
+def _is_main_process() -> bool:
+    """True on rank 0 (or single-process runs). Reads the launcher's env, no torch.distributed needed."""
+    return int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")) or "0") <= 0
+
+
+def _setup_logging() -> None:
+    """Restore the original ``train_peft.py`` logging surface.
+
+    A timestamped root format plus ``transformers``/``datasets`` verbosity raised to INFO on the main
+    process. The verbosity bump is what makes ``Trainer`` emit its ``***** Running training *****``
+    summary (num examples, per-device / global batch size, gradient-accumulation steps, total
+    optimization steps, trainable params); at the default WARNING level that block is suppressed.
+    """
+    import datasets
+    import transformers
+
+    level = logging.INFO if _is_main_process() else logging.WARNING
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        level=level,
+    )
+    logger.setLevel(level)
+    datasets.utils.logging.set_verbosity(level)
+    transformers.utils.logging.set_verbosity(level)
+    if _is_main_process():
+        transformers.utils.logging.enable_default_handler()
+        transformers.utils.logging.enable_explicit_format()
+
+
+def _configure_tracking(cfg: dict) -> str | list:
+    """Resolve ``report_to`` and, when W&B is requested, export project/entity from the config.
+
+    Default is ``none`` so a fresh clone / CI run never blocks on a missing W&B login. Set
+    ``report_to: wandb`` (+ ``wandb_project`` / ``wandb_entity``, or the ``WANDB_*`` env vars) to enable.
+    """
+    report_to = cfg.get("report_to", "none")
+    uses_wandb = "wandb" in (report_to if isinstance(report_to, (list, tuple)) else [report_to])
+    if uses_wandb:
+        project = cfg.get("wandb_project") or os.environ.get("WANDB_PROJECT")
+        entity = cfg.get("wandb_entity") or os.environ.get("WANDB_ENTITY")
+        if project:
+            os.environ["WANDB_PROJECT"] = str(project)
+        if entity:
+            os.environ["WANDB_ENTITY"] = str(entity)
+    return report_to
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,6 +132,9 @@ def main() -> None:
     args = parse_args()
     cfg = load_run_config(args.config, args.override)
 
+    _setup_logging()
+    logger.info("Run config:\n%s", json.dumps(cfg, indent=2, default=str, sort_keys=True))
+
     seed = int(cfg.get("seed", 42))
     set_seed(seed)
     packing = cfg.get("packing", "fa2_collator")
@@ -103,6 +160,8 @@ def main() -> None:
     )
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
+    if _is_main_process():
+        logger.info("model:\n%s", model)  # full module structure (mirrors train_peft.py)
     if gradient_checkpointing:
         model.enable_input_require_grads()  # required for gradient checkpointing with a peft adapter
 
@@ -121,6 +180,12 @@ def main() -> None:
     if validation_file:
         raw_val = load_dataset("json", data_files=validation_file, split="train")
         eval_dataset = pack_text_dataset(raw_val, tokenizer, max_length=max_seq_length, strategy=packing, num_proc=num_proc)
+
+    if _is_main_process():
+        logger.info("train packed examples: %d", len(tokenized))
+        logger.info("eval packed examples: %s", len(eval_dataset) if eval_dataset is not None else "none (no validation_file)")
+        for i in range(min(3, len(tokenized))):
+            logger.info("Sample %d: %s", i, tokenized[i])  # token-id rows (mirrors train_peft.py)
 
     if packing == "fa2_collator":
         collator = PackingCollator()
@@ -152,7 +217,8 @@ def main() -> None:
         eval_steps=int(cfg.get("eval_steps", 100)),
         seed=seed,
         remove_unused_columns=False,  # the collator consumes the tokenized fields directly
-        report_to=[],
+        report_to=_configure_tracking(cfg),  # "none" (default) | "wandb" — see train.yaml
+        run_name=cfg.get("run_name") or os.path.basename(cfg["output_dir"].rstrip("/")),
     )
 
     trainer = Trainer(

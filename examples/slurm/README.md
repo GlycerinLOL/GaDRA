@@ -69,6 +69,9 @@ sbatch --gpus-per-node=4 examples/slurm/train.slurm
   [`examples/config/train.yaml`](../config/train.yaml). Edit it, or override at the bottom of the script.
 - **Variants**: add `--override router_conditioning=mono` (GaDRA-Mono) or `--override gate=soft` to the
   `examples.train` line in the script.
+- **Weights & Biases** (off by default): set `report_to: wandb` in [`train.yaml`](../config/train.yaml) and
+  either fill `wandb_project` / `wandb_entity` there or export `WANDB_PROJECT` / `WANDB_ENTITY` before
+  `sbatch` (they forward to the job). Run `uv run wandb login` once on the login node first.
 - **Output dir** mirrors the research repo's layout — `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/`, built by the
   script (knobs `DATASET=BBC_news`, `EXP_NAME=GaDRA`, `DATE=$(date +%Y%m%d)`; e.g. `export EXP_NAME=GaDRA-Mono`
   before `sbatch`). A re-run with the same dataset+date+exp_name **overwrites** it (clean slate, like the original).
@@ -104,7 +107,11 @@ tail -f slurm-logs/<jobid>.err               # errors
 ```
 
 - **Training** writes the adapter + tokenizer to `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/` (the slurm job sets
-  this; the `out/gadra-bbc/` in `train.yaml` is only the default for a manual, non-SLURM run).
+  this; the `out/gadra-bbc/` in `train.yaml` is only the default for a manual, non-SLURM run). A full copy of
+  the run log is `tee`'d into that dir as **`log.txt`** (same as the research repo): the resolved run-config,
+  the model structure, packed-example counts + sample rows, the Trainer's `***** Running training *****`
+  summary (num examples, per-device / global batch size, grad-accum, optimization steps, trainable params),
+  and the per-step losses. The `slurm-logs/<jobid>.{out,err}` files hold the same stream (plus launcher noise).
 - **Inference** prints metrics to the `.out` log (QA F1/EM, GSM8K EM, MBPP pass@1, or BBC-QA/TiEBe Correct%).
 
 ## Data
