@@ -107,8 +107,12 @@ def main() -> None:
         model.enable_input_require_grads()  # required for gradient checkpointing with a peft adapter
 
     max_seq_length = int(cfg.get("max_seq_length", 1024))
+    num_proc = int(cfg.get("preprocessing_num_workers", 8))
     raw = load_dataset("json", data_files=cfg["train_file"], split="train")
-    tokenized = pack_text_dataset(raw, tokenizer, max_length=max_seq_length, strategy=packing)
+    max_train_samples = cfg.get("max_train_samples")
+    if max_train_samples:  # smoke-run subsample (matches the original --max_train_samples)
+        raw = raw.select(range(min(int(max_train_samples), len(raw))))
+    tokenized = pack_text_dataset(raw, tokenizer, max_length=max_seq_length, strategy=packing, num_proc=num_proc)
 
     # Optional held-out validation (the original train/valid split): a separate JSONL in the same "text"
     # format, packed identically. When set, it enables eval during training (eval_strategy="steps").
@@ -116,7 +120,7 @@ def main() -> None:
     eval_dataset = None
     if validation_file:
         raw_val = load_dataset("json", data_files=validation_file, split="train")
-        eval_dataset = pack_text_dataset(raw_val, tokenizer, max_length=max_seq_length, strategy=packing)
+        eval_dataset = pack_text_dataset(raw_val, tokenizer, max_length=max_seq_length, strategy=packing, num_proc=num_proc)
 
     if packing == "fa2_collator":
         collator = PackingCollator()
@@ -128,6 +132,7 @@ def main() -> None:
         output_dir=cfg["output_dir"],
         overwrite_output_dir=True,
         num_train_epochs=float(cfg.get("num_train_epochs", 3.0)),
+        max_steps=int(cfg.get("max_steps", -1)),  # -1 = honor num_train_epochs; >0 caps steps (smoke run)
         per_device_train_batch_size=int(cfg.get("per_device_train_batch_size", 16)),
         gradient_accumulation_steps=int(cfg.get("gradient_accumulation_steps", 8)),
         learning_rate=float(cfg.get("learning_rate", 1e-4)),
@@ -142,6 +147,7 @@ def main() -> None:
         logging_steps=int(cfg.get("logging_steps", 1)),
         save_strategy=cfg.get("save_strategy", "steps"),
         save_steps=int(cfg.get("save_steps", 100)),
+        save_total_limit=int(cfg.get("save_total_limit", 2)),
         eval_strategy="steps" if eval_dataset is not None else "no",
         eval_steps=int(cfg.get("eval_steps", 100)),
         seed=seed,

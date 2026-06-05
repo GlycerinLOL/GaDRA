@@ -33,5 +33,11 @@ gradient_checkpointing: true                    # required to fit 8B + packing i
 logging_steps: 1
 save_strategy: steps
 save_steps: 100
+save_total_limit: 2                             # keep only the N most recent checkpoints (matches the original)
 eval_steps: 100                                 # eval cadence (only used when validation_file is set)
+preprocessing_num_workers: 8                    # parallel tokenization workers (matches the original)
 seed: 42
+
+# --- Smoke-run knobs (defaults = full run; override for a quick pipeline check) ---
+max_steps: -1                                   # -1 = run the full num_train_epochs; e.g. 20 for a smoke run
+max_train_samples: null                         # null = full corpus; e.g. 4000 to subsample for a smoke run
