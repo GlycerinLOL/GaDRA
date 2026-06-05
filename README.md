@@ -20,6 +20,13 @@ standard peft API — swap `LoraConfig` for `GaDRAConfig`.
 
 ## Approach
 
+<p align="center">
+  <img src="assets/gadra_overview.png" width="760" alt="GaDRA method overview: a per-position hard gate over one adapted MLP projection, dual-conditioned on the frozen base output and the LoRA residual">
+</p>
+<p align="center"><em>One adapted MLP projection. A per-position hard gate <code>γₜ ∈ {0,1}</code>, dual-conditioned on the
+frozen base output <code>y⁰</code> and the LoRA residual <code>δ</code>, decides whether to apply the residual;
+when it closes (<code>γₜ=0</code>) the module output is bit-identical to the frozen base.</em></p>
+
 For an adapted module at sequence position `t`, standard LoRA is always-on: `yₜ = yₜ⁰ + δₜ`, with
 `δₜ = α·B·A·xₜ`. GaDRA inserts a per-position gate `γₜ ∈ {0,1}`:
 
@@ -65,6 +72,13 @@ GaDRA stays at near-parity on the target corpus (Δ_tgt −1.48) while recoverin
 loses (Δ_ret +11.08), for the **best overall trade-off**. A **Qwen3-8B** cross-architecture probe shows the same
 direction (Overall **+4.73**). See the paper for the full per-corpus tables, the dual×hard ablation, and the
 gate-intervention analysis.
+
+<p align="center">
+  <img src="assets/budget_profile.png" width="640" alt="Learned per-layer activation budget by MLP module type across the 32 decoder layers">
+</p>
+<p align="center"><em>The gain comes from a learned per-(layer×module) <strong>activation budget</strong>: <code>gate_proj</code>
+stays active (≈0.99) and <code>up_proj</code> high (≈0.88), while most <code>down_proj</code> blocks stay closed
+(≈0.31). Flattening this to a single global budget degrades target acquisition.</em></p>
 
 ## Installation
 
