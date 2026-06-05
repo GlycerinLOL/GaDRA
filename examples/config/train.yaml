@@ -4,6 +4,7 @@
 # --- Model + data ---
 model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
 train_file: data/corpus.jsonl                 # JSONL with a "text" field per line (PT format)
+validation_file: null                         # optional held-out JSONL (same "text" format); set it to enable eval during training
 output_dir: out/gadra-bbc
 chat_template_path: examples/config/llama3.2-Instruct.jinja   # optional; unused for plain PT text
 packing: fa2_collator                         # fa2_collator (paper-faithful, needs FA2) | group (portable, SDPA)
@@ -32,4 +33,5 @@ gradient_checkpointing: true                    # required to fit 8B + packing i
 logging_steps: 1
 save_strategy: steps
 save_steps: 100
+eval_steps: 100                                 # eval cadence (only used when validation_file is set)
 seed: 42

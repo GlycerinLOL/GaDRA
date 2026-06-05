@@ -106,9 +106,17 @@ def main() -> None:
     if gradient_checkpointing:
         model.enable_input_require_grads()  # required for gradient checkpointing with a peft adapter
 
-    raw = load_dataset("json", data_files=cfg["train_file"], split="train")
     max_seq_length = int(cfg.get("max_seq_length", 1024))
+    raw = load_dataset("json", data_files=cfg["train_file"], split="train")
     tokenized = pack_text_dataset(raw, tokenizer, max_length=max_seq_length, strategy=packing)
+
+    # Optional held-out validation (the original train/valid split): a separate JSONL in the same "text"
+    # format, packed identically. When set, it enables eval during training (eval_strategy="steps").
+    validation_file = cfg.get("validation_file")
+    eval_dataset = None
+    if validation_file:
+        raw_val = load_dataset("json", data_files=validation_file, split="train")
+        eval_dataset = pack_text_dataset(raw_val, tokenizer, max_length=max_seq_length, strategy=packing)
 
     if packing == "fa2_collator":
         collator = PackingCollator()
@@ -134,12 +142,16 @@ def main() -> None:
         logging_steps=int(cfg.get("logging_steps", 1)),
         save_strategy=cfg.get("save_strategy", "steps"),
         save_steps=int(cfg.get("save_steps", 100)),
+        eval_strategy="steps" if eval_dataset is not None else "no",
+        eval_steps=int(cfg.get("eval_steps", 100)),
         seed=seed,
         remove_unused_columns=False,  # the collator consumes the tokenized fields directly
         report_to=[],
     )
 
-    trainer = Trainer(model=model, args=training_args, train_dataset=tokenized, data_collator=collator)
+    trainer = Trainer(
+        model=model, args=training_args, train_dataset=tokenized, eval_dataset=eval_dataset, data_collator=collator
+    )
     trainer.train()
     model.save_pretrained(cfg["output_dir"])
     tokenizer.save_pretrained(cfg["output_dir"])
