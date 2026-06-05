@@ -33,7 +33,8 @@ gradient_checkpointing: true                    # required to fit 8B + packing i
 logging_steps: 1
 save_strategy: steps
 save_steps: 100
-save_total_limit: 2                             # keep only the N most recent checkpoints (matches the original)
+save_total_limit: 1                             # keep only the N most recent checkpoints (original uses 1)
+save_only_model: true                           # checkpoint the adapter only — no optimizer/scheduler/rng/global_step (original; small ckpts, no resume)
 eval_steps: 100                                 # eval cadence (only used when validation_file is set)
 preprocessing_num_workers: 8                    # parallel tokenization workers (matches the original)
 seed: 42

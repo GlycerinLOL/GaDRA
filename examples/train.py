@@ -212,7 +212,10 @@ def main() -> None:
         logging_steps=int(cfg.get("logging_steps", 1)),
         save_strategy=cfg.get("save_strategy", "steps"),
         save_steps=int(cfg.get("save_steps", 100)),
-        save_total_limit=int(cfg.get("save_total_limit", 2)),
+        save_total_limit=int(cfg.get("save_total_limit", 1)),
+        # Only the model/adapter is checkpointed — no optimizer / scheduler / RNG / global_step
+        # (matches the research repo; keeps 8B + DeepSpeed checkpoints small. Trade-off: can't resume.)
+        save_only_model=bool(cfg.get("save_only_model", True)),
         eval_strategy="steps" if eval_dataset is not None else "no",
         eval_steps=int(cfg.get("eval_steps", 100)),
         seed=seed,
