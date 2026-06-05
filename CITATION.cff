@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it using the metadata below.
+  The accompanying paper citation will be added upon publication.
+title: "GaDRA: Gated Dual-conditioned Residual Adapter"
+abstract: >-
+  A HuggingFace peft-native implementation of GaDRA, a parameter-efficient
+  adapter with a per-token, input-conditioned residual gate that learns when
+  not to apply the LoRA update.
+type: software
+authors:
+  - name: "GlycerinLOL"
+version: "0.0.0.dev0"
+license: Apache-2.0
+repository-code: "https://github.com/GlycerinLOL/GaDRA"
+url: "https://github.com/GlycerinLOL/GaDRA"
+keywords:
+  - peft
+  - lora
+  - adapter
+  - parameter-efficient-fine-tuning
+  - llm
+  - continual-learning

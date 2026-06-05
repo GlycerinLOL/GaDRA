@@ -1,0 +1,30 @@
+# GaDRA paper-repro inference / eval run-config (consumed by `python -m examples.inference --config <this>`).
+# Deterministic metrics (no key): qa -> char-F1/EM, gsm8k -> exact-match, mbpp -> pass@1.
+# GPT-judged metrics (need OPENAI_API_KEY in the env): bbcqa -> Correct%, tiebe -> Correct%.
+# Override on the CLI as usual, e.g. `--override task=bbcqa --override eval_file=data/bbcqa_test.jsonl`.
+
+base: meta-llama/Llama-3.1-8B-Instruct
+adapter: out/gadra-bbc                          # directory saved by examples.train (save_pretrained)
+chat_template_path: examples/config/llama3.2-Instruct.jinja   # applied to messages/question (matches the paper)
+
+task: gsm8k                                     # qa | gsm8k | mbpp (deterministic) | bbcqa | tiebe (GPT-judged)
+eval_file: data/gsm8k_test.jsonl
+batch_size: 16
+max_new_tokens: 256
+use_raw_text: false                             # true -> use the pre-formatted `text` field as the prompt (e.g. GSM8K 8-shot)
+
+# GPT judge (bbcqa / tiebe only) — key comes from the OPENAI_API_KEY env var, never the repo.
+gpt_model: gpt-4.1-mini
+gpt_repeats: 1
+gpt_vote_rate: 50
+documents_file: null                            # bbcqa only: original-document JSONL (the judge's source article, by id)
+
+# Eval JSONL — the paper's raw files (id + messages, or question + text) work directly:
+#   prompt    : explicit `prompt` (verbatim) > `text` (when use_raw_text) > `messages` (chat template) > `question`
+#   reference : `messages[-1]` (gold answer), or explicit `answer`/`answers`/`answer_list`
+#   qa    -> char-F1/EM vs the reference
+#   gsm8k -> EM vs `answers`/`answer` (a list, or a Python-repr stringified list — both handled)
+#   mbpp  -> `test` (test program; requires HF_ALLOW_CODE_EVAL=1, runs candidate code in a sandbox)
+#   bbcqa -> GPT judge vs the source article: question from `messages[-2]`, document from `documents_file`
+#            keyed by `id` (with the -QA / -1turnQA suffix stripped), or an explicit `document` field
+#   tiebe -> GPT judge vs the expected answer (`messages[-1]` or `answer`); question from `messages[-2]`

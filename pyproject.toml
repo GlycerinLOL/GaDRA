@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gadra"
+version = "0.0.0.dev0"
+description = "GaDRA (Gated Dual-conditioned Residual Adapter) as a HuggingFace peft-native custom tuner"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "GlycerinLOL" }]
+keywords = ["peft", "lora", "adapter", "parameter-efficient-fine-tuning", "llm"]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Pinned to the validated environment. The enum-extension registration in gadra._register
+# is verified against exactly this peft version.
+dependencies = [
+    "torch>=2.1",
+    "transformers==4.53.3",
+    "peft==0.16.0",
+    "safetensors>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/GlycerinLOL/GaDRA"
+Repository = "https://github.com/GlycerinLOL/GaDRA"
+Issues = "https://github.com/GlycerinLOL/GaDRA/issues"
+
+# The installable package is the METHOD ONLY. Data / eval / inference live in the repo-only
+# `examples/` reproduction tree (NOT shipped in the wheel); their deps live in the `gpu` dependency-group
+# (uv) — see [dependency-groups] below — never in extras (which would leak into the wheel metadata).
+[project.optional-dependencies]
+# `wheel` is required so tests/test_wheel_purity.py can build the wheel (pip wheel --no-build-isolation)
+# in the deps-absent `package` CI job — otherwise that purity gate would silently skip.
+dev = ["pytest>=8", "ruff>=0.5", "wheel>=0.42"]
+
+# PEP 735 dependency-groups are LOCAL-ONLY (resolved into uv.lock, never written into the published wheel
+# METADATA — unlike extras). This is what keeps `pip install gadra` method-only while the repo reproduces
+# the paper. Single-GPU and multi-GPU install the SAME packages; multi-GPU differs only in the launch
+# (accelerate + DeepSpeed ZeRO-2), so there is one group, not two.
+[dependency-groups]
+gpu = [
+    "datasets>=2.18",
+    "evaluate>=0.4",
+    "accelerate>=0.30",
+    "deepspeed>=0.17",
+    "pyyaml>=6",
+    "openai>=1.0",                  # GPT-judged BBC-QA / TiEBe "Correct %" (key from OPENAI_API_KEY env)
+    # Prebuilt FA2 wheel pinned in [tool.uv.sources]; cp312/torch2.6/cu12 only (gated by marker).
+    "flash-attn==2.7.4.post1 ; python_version == '3.12' and sys_platform == 'linux'",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------------------------------
+# uv project config (consumed ONLY by uv — never reaches the published wheel METADATA).
+# ---------------------------------------------------------------------------------------------------
+[tool.uv]
+# Bare `uv sync` installs the method only; the GPU/repro env is an explicit opt-in: `uv sync --group gpu`.
+default-groups = []
+# Pin torch to the FA2-wheel's ABI (cu124 / torch 2.6 / pre-cxx11). torch and the flash-attn wheel are
+# COUPLED invariants — the wheel is cxx11abiFALSE+torch2.6; bumping torch off 2.6 requires a new FA2 URL.
+constraint-dependencies = ["torch==2.6.0"]
+# Belt-and-suspenders: inert while flash-attn installs from the prebuilt wheel URL below; matters only if a
+# user overrides the source to a non-wheel (then torch must already be in the env — it is, via the group).
+no-build-isolation-package = ["flash-attn"]
+
+# Explicit cu124 PyTorch index: consulted ONLY for packages routed to it via [tool.uv.sources] (here torch),
+# never for the rest of the graph (that stays on PyPI).
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124", marker = "sys_platform == 'linux'" }
+# Dao-AILab prebuilt FA2 wheel: NO source build (no nvcc/compiler), offline-cacheable, manylinux2014
+# (glibc 2.17 floor -> runs on this glibc 2.28 host). cp312 / torch2.6 / cu12 / cxx11abiFALSE.
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux'" }
+
+[tool.ruff]
+line-length = 200
+
+[tool.pytest.ini_options]
+# Default run = the package (method-only) suite. The reproduction suite is run explicitly:
+#   pytest examples/tests/   (after: pip install -r requirements-repro.txt)
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "parity: numeric parity tests vs the original GaDRA implementation",
+    "gpu: requires CUDA",
+]

@@ -1,0 +1,35 @@
+# GaDRA continual pre-training run-config (consumed by `python -m examples.train --config <this>`).
+# Override any field on the CLI: `--override learning_rate=5e-4 --override packing=group`.
+
+# --- Model + data ---
+model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+train_file: data/corpus.jsonl                 # JSONL with a "text" field per line (PT format)
+output_dir: out/gadra-bbc
+chat_template_path: examples/config/llama3.2-Instruct.jinja   # optional; unused for plain PT text
+packing: fa2_collator                         # fa2_collator (paper-faithful, needs FA2) | group (portable, SDPA)
+
+# --- GaDRA adapter (paper defaults) ---
+r: 512
+lora_alpha: 1.0
+lora_dropout: 0.05
+target_modules: [up_proj, gate_proj, down_proj]
+router_conditioning: dual                     # dual (GaDRA) | mono (GaDRA-Mono)
+gate: hard                                    # hard (Gumbel-STE) | soft
+
+# --- Training recipe (matches the canonical BBC GaDRA run: train_gadra_cpt.py + configs/datasets/BBC_news_pt.yaml) ---
+# LR/warmup are the BBC cell of the paper's Table 8 — other datasets/methods use different cells.
+learning_rate: 3.0e-4
+warmup_ratio: 0.05
+num_train_epochs: 3.0
+per_device_train_batch_size: 16
+# Global batch size 128 is the invariant. Single GPU: 16 x 8 = 128. For N GPUs set
+# gradient_accumulation_steps = 128 / (per_device_train_batch_size * N).
+gradient_accumulation_steps: 8
+max_seq_length: 1024
+weight_decay: 0.01
+max_grad_norm: 0.1
+gradient_checkpointing: true                    # required to fit 8B + packing in memory (canonical run uses it)
+logging_steps: 1
+save_strategy: steps
+save_steps: 100
+seed: 42

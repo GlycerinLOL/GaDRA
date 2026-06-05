@@ -1,0 +1,31 @@
+# LoRA baseline continual pre-training run-config (the method GaDRA is compared against).
+# Consumed by `python -m examples.train_lora_baseline --config <this>`. Same recipe/data as train.yaml,
+# minus the GaDRA-specific gate fields (router_conditioning / gate). Override on the CLI as usual.
+
+# --- Model + data ---
+model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+train_file: data/corpus.jsonl                 # JSONL with a "text" field per line (PT format) — see README "Data"
+output_dir: out/lora-bbc
+chat_template_path: examples/config/llama3.2-Instruct.jinja
+packing: fa2_collator                         # fa2_collator (paper-faithful, needs FA2) | group (portable, SDPA)
+
+# --- LoRA adapter (matched to GaDRA's adapter for a fair baseline) ---
+r: 512
+lora_alpha: 1.0
+lora_dropout: 0.05
+target_modules: [up_proj, gate_proj, down_proj]
+
+# --- Training recipe (same recipe as the GaDRA run; set the LoRA-baseline cell of Table 8 if it differs) ---
+learning_rate: 3.0e-4
+warmup_ratio: 0.05
+num_train_epochs: 3.0
+per_device_train_batch_size: 16
+gradient_accumulation_steps: 8                  # global batch 128 = 16 x 8 (single GPU); 128/(16*N) for N GPUs
+max_seq_length: 1024
+weight_decay: 0.01
+max_grad_norm: 0.1
+gradient_checkpointing: true
+logging_steps: 1
+save_strategy: steps
+save_steps: 100
+seed: 42

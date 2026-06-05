@@ -1,0 +1,70 @@
+[
+  {
+    "name": "dual_hard",
+    "file": "golden_dual_hard.pt",
+    "router_type": "MA",
+    "gamma_hard_masking": "Gumbel",
+    "state_dict_keys": [
+      "adapter.0.weight",
+      "adapter.1.weight",
+      "gating.0.weight",
+      "gating.0.bias"
+    ],
+    "eval_output_shape": [
+      2,
+      5,
+      24
+    ]
+  },
+  {
+    "name": "dual_soft",
+    "file": "golden_dual_soft.pt",
+    "router_type": "MA",
+    "gamma_hard_masking": null,
+    "state_dict_keys": [
+      "adapter.0.weight",
+      "adapter.1.weight",
+      "gating.0.weight",
+      "gating.0.bias"
+    ],
+    "eval_output_shape": [
+      2,
+      5,
+      24
+    ]
+  },
+  {
+    "name": "mono_hard",
+    "file": "golden_mono_hard.pt",
+    "router_type": "UniPELT",
+    "gamma_hard_masking": "Gumbel",
+    "state_dict_keys": [
+      "adapter.0.weight",
+      "adapter.1.weight",
+      "gating.0.weight",
+      "gating.0.bias"
+    ],
+    "eval_output_shape": [
+      2,
+      5,
+      24
+    ]
+  },
+  {
+    "name": "mono_soft",
+    "file": "golden_mono_soft.pt",
+    "router_type": "UniPELT",
+    "gamma_hard_masking": null,
+    "state_dict_keys": [
+      "adapter.0.weight",
+      "adapter.1.weight",
+      "gating.0.weight",
+      "gating.0.bias"
+    ],
+    "eval_output_shape": [
+      2,
+      5,
+      24
+    ]
+  }
+]

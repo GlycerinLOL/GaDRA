@@ -1,0 +1,37 @@
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content']|trim %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "" %}
+{%- endif %}
+
+{%- for message in messages -%}
+    {%- if (loop.index0 % 2 == 0) and (message["role"] == "user") -%}
+        {# continue, do nothing #}
+    {%- elif (loop.index0 % 2 == 1) and (message["role"] == "assistant") -%}
+        {# continue, do nothing #}
+    {%- else -%}
+        {{- raise_exception("After the optional system message, conversation roles must alternate user/assistant/user/assistant/...") -}}
+    {%- endif -%}
+{%- endfor -%}
+
+{{- bos_token -}}
+{%- if system_message != "" %}
+    {{- "<|start_header_id|>system<|end_header_id|>\n\n" + system_message + "<|eot_id|>" -}}
+{% endif %}
+{%- for message in messages %}
+    {% if message['role'] == 'user' %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content']|trim + '<|eot_id|>' -}}
+    {% elif message['role'] == 'assistant' %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' -}}
+        {% generation %}
+        {{- message['content']|trim + '<|eot_id|>' -}}
+        {% endgeneration %}
+    {% else %}
+        {{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}
+    {% endif %}
+{%- endfor %}
+
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+{%- endif %}

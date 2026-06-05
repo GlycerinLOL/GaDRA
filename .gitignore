@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# venv / env
+.venv/
+venv/
+env/
+
+# notebooks / scratch
+.ipynb_checkpoints/
+
+# Parity golden baselines under tests/_golden/*.pt are SMALL (~9KB) and intentionally COMMITTED:
+# the package ships without the source research repo, so parity must be self-contained.
+# Ignore only oversized / scratch parity artifacts.
+tests/_golden/*.bin
+tests/_golden/scratch/
+
+# OS
+.DS_Store
+
+# OMC orchestration state (local only — never published)
+.omc/
+
+# OSS hardening scaffolding (audit/plan/refactor/test-strategy/ci skill outputs) — local working
+# notes only; some cite the maintainer's host path, so they are never committed to the public repo.
+OSS_*.md

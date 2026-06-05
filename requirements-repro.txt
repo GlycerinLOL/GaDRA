@@ -1,0 +1,13 @@
+# Pip fallback for the PORTABLE reproduction path (inference + eval + group-packing training under SDPA).
+#
+# The RECOMMENDED path is uv: `uv sync --group gpu` — it adds the prebuilt flash-attn wheel (FA2 parity)
+# and deepspeed (multi-GPU), which plain pip cannot install cleanly on an offline / no-toolchain host.
+# This file covers what pip CAN install easily; for FA2-parity / multi-GPU use uv.
+#
+# Regenerate from the lock (keeps it in sync, no hand-editing):
+#   uv export --group gpu --no-hashes --no-emit-project -o requirements-repro.txt   # then re-add `-e .`
+-e .
+datasets>=2.18
+evaluate>=0.4
+accelerate>=0.30
+pyyaml>=6
