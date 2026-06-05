@@ -91,8 +91,10 @@ stays active (≈0.99) and <code>up_proj</code> high (≈0.88), while most <code
 
 ## Installation
 
-**Use the method** (method-only deps: `torch`, `transformers==4.53.3`, `peft==0.16.0`, `safetensors` — no
-data / eval / inference deps):
+Two entry points, by goal — **pick one**; they overlap (reproduction already includes the method).
+
+**A · Use GaDRA in your own project** — the method only (deps: `torch`, `transformers==4.53.3`,
+`peft==0.16.0`, `safetensors`; no data / eval / inference deps):
 
 ```bash
 pip install gadra                                      # once released on PyPI
@@ -100,8 +102,10 @@ pip install gadra                                      # once released on PyPI
 pip install "git+https://github.com/GlycerinLOL/GaDRA.git"
 ```
 
-**Reproduce the paper** — the training + inference workflow is managed with [uv](https://docs.astral.sh/uv/)
-(one environment for single- and multi-GPU; they install the same packages and differ only in the launch):
+**B · Reproduce the paper** — clone + [uv](https://docs.astral.sh/uv/). `uv sync` installs the `gadra` method
+itself (editable, from the clone) **plus** the reproduction tooling (data / eval / training deps), so you do
+**not** `pip install gadra` separately. One environment covers single- and multi-GPU (same packages; only the
+launch differs):
 
 ```bash
 # 1. install uv (one-time; it then fetches CPython 3.12 per .python-version — no system Python/conda needed)
