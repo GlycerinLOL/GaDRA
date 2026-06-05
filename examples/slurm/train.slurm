@@ -18,7 +18,9 @@
 # On an account/partition cluster (e.g. nano5), set these once — Slurm reads them, no file edit:
 #   export SBATCH_ACCOUNT=<account> SBATCH_PARTITION=<partition>
 #
-# Knobs (env vars; paper defaults): N_GPUS (auto-detected), MBS=16 (per-device batch), GBS=128 (global batch).
+# Knobs (env vars; paper defaults): N_GPUS (auto-detected), MBS=16 (per-device batch), GBS=128 (global batch),
+# DATASET=BBC_news, EXP_NAME=GaDRA, DATE=$(date +%Y%m%d). Output dir mirrors the research repo's layout:
+#   save/<DATASET>/<DATE>/CPT/<EXP_NAME>   (a same dataset+date+exp_name re-run overwrites — clean slate).
 # Multi-NODE is out of scope here (single node); ask if you need cross-node rendezvous.
 
 #SBATCH --job-name=gadra-cpt
@@ -64,6 +66,16 @@ echo "GPUs=${N_GPUS}  per_device_bs=${MBS}  grad_accum=${GA}  ->  global_batch=$
 [ "${EFF_GBS}" -ne "${GBS}" ] && \
     echo "WARNING: effective global batch ${EFF_GBS} != target ${GBS}; adjust GPU count / MBS / GBS." >&2
 
+# --- Output dir: mirror the research repo's layout  save/<dataset>/<date>/CPT/<exp_name>  (submit.sh) ---
+DATASET="${DATASET:-BBC_news}"
+EXP_NAME="${EXP_NAME:-GaDRA}"
+DATE="${DATE:-$(date +%Y%m%d)}"
+[ -n "${DATASET}" ] && [ -n "${EXP_NAME}" ] && [ -n "${DATE}" ] || { echo "ERROR: DATASET/EXP_NAME/DATE must be non-empty" >&2; exit 2; }
+SAVE="save/${DATASET}/${DATE}/CPT/${EXP_NAME}"
+rm -rf "${SAVE}"          # same dataset+date+exp_name re-run = clean slate (matches the original)
+mkdir -p "${SAVE}"
+echo "output_dir: ${SAVE}"
+
 # --- Launch: accelerate + DeepSpeed ZeRO-2, one process per GPU; grad-accum keeps GBS fixed ---
 uv run --no-sync --offline accelerate launch \
     --num_machines "${SLURM_JOB_NUM_NODES:-1}" \
@@ -71,7 +83,8 @@ uv run --no-sync --offline accelerate launch \
     --config_file examples/config/deepspeed_zero2.yaml \
     -m examples.train --config examples/config/train.yaml \
     --override per_device_train_batch_size="${MBS}" \
-    --override gradient_accumulation_steps="${GA}"
+    --override gradient_accumulation_steps="${GA}" \
+    --override output_dir="${SAVE}"
 
 # Single-GPU variant (no accelerate/deepspeed; train.yaml already encodes GBS 128 = 16 x 8):
 #   uv run --no-sync --offline python -m examples.train --config examples/config/train.yaml

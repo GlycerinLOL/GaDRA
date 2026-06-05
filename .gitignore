@@ -38,6 +38,7 @@ OSS_*.md
 data/*
 !data/README.md
 out/
+save/
 slurm-logs/
 
 # uv cache / managed python placed inside the repo by the SLURM two-phase setup

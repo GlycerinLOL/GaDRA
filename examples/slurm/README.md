@@ -69,6 +69,11 @@ sbatch --gpus-per-node=4 examples/slurm/train.slurm
   [`examples/config/train.yaml`](../config/train.yaml). Edit it, or override at the bottom of the script.
 - **Variants**: add `--override router_conditioning=mono` (GaDRA-Mono) or `--override gate=soft` to the
   `examples.train` line in the script.
+- **Output dir** mirrors the research repo's layout — `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/`, built by the
+  script (knobs `DATASET=BBC_news`, `EXP_NAME=GaDRA`, `DATE=$(date +%Y%m%d)`; e.g. `export EXP_NAME=GaDRA-Mono`
+  before `sbatch`). A re-run with the same dataset+date+exp_name **overwrites** it (clean slate, like the original).
+- **GPU by default** — the script requests `--gpus-per-node=2` and trains on GPU (DeepSpeed `use_cpu: false`,
+  one process per GPU); no extra step needed. Change the count with `sbatch --gpus-per-node=N`.
 
 ## 3. Submit inference
 
@@ -98,7 +103,8 @@ tail -f slurm-logs/<jobid>.out               # live stdout (the grad-accum / pro
 tail -f slurm-logs/<jobid>.err               # errors
 ```
 
-- **Training** writes the adapter + tokenizer to `output_dir` in `train.yaml` (default `out/gadra-bbc/`).
+- **Training** writes the adapter + tokenizer to `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/` (the slurm job sets
+  this; the `out/gadra-bbc/` in `train.yaml` is only the default for a manual, non-SLURM run).
 - **Inference** prints metrics to the `.out` log (QA F1/EM, GSM8K EM, MBPP pass@1, or BBC-QA/TiEBe Correct%).
 
 ## Data
