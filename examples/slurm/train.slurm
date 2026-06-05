@@ -1,19 +1,25 @@
 #!/bin/bash
 # GaDRA multi-GPU continual pre-training under SLURM, managed with uv (no conda).
 #
+# Single-node, N-GPU: `accelerate launch` + DeepSpeed ZeRO-2 (one process per GPU). The gradient-accumulation
+# steps are auto-computed so the paper's global batch size (128) is held no matter how many GPUs you request.
+#
 # TWO-PHASE workflow (compute nodes are typically offline):
 #   1) ON THE LOGIN NODE (has internet), ONCE, before submitting — populate the shared uv cache + .venv:
-#        export GADRA_REPO=/path/to/shared/GaDRA   # your checkout, on a filesystem both node types can see
+#        export GADRA_REPO=/path/to/shared/GaDRA   # checkout on a filesystem both node types can see
 #        export UV_CACHE_DIR="$GADRA_REPO/.uv-cache"
 #        export UV_PYTHON_INSTALL_DIR="$GADRA_REPO/.uv-python"
 #        cd "$GADRA_REPO" && uv sync --group gpu --locked
 #      (downloads cu124 torch + the prebuilt flash-attn wheel + deepspeed into the cache; commits nothing.)
-#   2) Submit this script:  sbatch examples/slurm/train.slurm
+#   2) Submit:
+#        sbatch examples/slurm/train.slurm                      # uses the GPUs allocated below (default 2)
+#        sbatch --gpus-per-node=4 examples/slurm/train.slurm    # 4 GPUs — grad-accum auto-adjusts to GBS 128
 #
 # On an account/partition cluster (e.g. nano5), set these once — Slurm reads them, no file edit:
 #   export SBATCH_ACCOUNT=<account> SBATCH_PARTITION=<partition>
 #
-# Everything below runs on an OFFLINE compute node and reuses the login-node env on the shared filesystem.
+# Knobs (env vars; paper defaults): N_GPUS (auto-detected), MBS=16 (per-device batch), GBS=128 (global batch).
+# Multi-NODE is out of scope here (single node); ask if you need cross-node rendezvous.
 
 #SBATCH --job-name=gadra-cpt
 #SBATCH --nodes=1
@@ -42,14 +48,30 @@ unset CONDA_PREFIX CONDA_DEFAULT_ENV 2>/dev/null || true
 cd "$REPO"
 mkdir -p slurm-logs
 
-# Multi-GPU = the paper's workflow: accelerate launch + DeepSpeed ZeRO-2, one process per GPU.
-N_GPUS="${SLURM_GPUS_PER_NODE:-2}"
+# --- GPU count: prefer Slurm's per-node allocation, else count visible GPUs, else 1 ---
+N_GPUS="${N_GPUS:-${SLURM_GPUS_ON_NODE:-}}"
+if ! [[ "${N_GPUS}" =~ ^[0-9]+$ ]] || [ "${N_GPUS}" -lt 1 ]; then
+    N_GPUS=$(nvidia-smi -L 2>/dev/null | grep -c '^GPU' || true)
+fi
+[ "${N_GPUS:-0}" -lt 1 ] && N_GPUS=1
 
+# --- Hold the paper's global batch size: GBS = per_device_bs * grad_accum * N_GPUS = 128 ---
+MBS="${MBS:-16}"                       # per_device_train_batch_size (paper)
+GBS="${GBS:-128}"                      # target global batch size (paper invariant)
+GA=$(( GBS / (MBS * N_GPUS) )); [ "${GA}" -lt 1 ] && GA=1
+EFF_GBS=$(( MBS * GA * N_GPUS ))
+echo "GPUs=${N_GPUS}  per_device_bs=${MBS}  grad_accum=${GA}  ->  global_batch=${EFF_GBS} (target ${GBS})"
+[ "${EFF_GBS}" -ne "${GBS}" ] && \
+    echo "WARNING: effective global batch ${EFF_GBS} != target ${GBS}; adjust GPU count / MBS / GBS." >&2
+
+# --- Launch: accelerate + DeepSpeed ZeRO-2, one process per GPU; grad-accum keeps GBS fixed ---
 uv run --no-sync --offline accelerate launch \
     --num_machines "${SLURM_JOB_NUM_NODES:-1}" \
-    --num_processes "$N_GPUS" \
+    --num_processes "${N_GPUS}" \
     --config_file examples/config/deepspeed_zero2.yaml \
-    -m examples.train --config examples/config/train.yaml
+    -m examples.train --config examples/config/train.yaml \
+    --override per_device_train_batch_size="${MBS}" \
+    --override gradient_accumulation_steps="${GA}"
 
-# Single-GPU variant (drop accelerate/deepspeed):
+# Single-GPU variant (no accelerate/deepspeed; train.yaml already encodes GBS 128 = 16 x 8):
 #   uv run --no-sync --offline python -m examples.train --config examples/config/train.yaml
