@@ -68,6 +68,10 @@ def test_invalid_choices_raise():
 
 
 def test_from_legacy_dual_and_mono():
+    # Reads the source research repo's real legacy configs (parents[2]/configs); absent in a standalone
+    # checkout / CI, so skip there. The conversion logic itself is covered by the synthetic-spec tests below.
+    if not (_CONFIGS / "peft_config.json").exists():
+        pytest.skip("source-repo configs/ not present (standalone checkout) — synthetic-spec tests cover from_legacy")
     dual = GaDRAConfig.from_legacy_peft_config(json.loads((_CONFIGS / "peft_config.json").read_text()))
     assert dual.router_conditioning == "dual"
     assert dual.gate == "hard"

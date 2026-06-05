@@ -30,6 +30,9 @@ jobs:
       - name: Install (method + dev ONLY — no datasets/evaluate/accelerate)
         run: |
           python -m pip install --upgrade pip
+          # CPU torch pinned to the parity-golden version: the bit-exact layer goldens were captured on
+          # torch 2.6.0; softplus (soft gate) drifts past atol=1e-6 on other torch builds. CPU wheel = fast.
+          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
 
       - name: Ruff
@@ -49,10 +52,12 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install (method + reproduction tooling deps)
+      - name: Install (method + dev + reproduction tooling deps)
         run: |
           python -m pip install --upgrade pip
-          pip install -e . -r requirements-repro.txt
+          # CPU torch 2.6.0 (parity-golden version); `.[dev]` brings pytest (requirements-repro has none).
+          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]" -r requirements-repro.txt
 
       - name: Pytest (reproduction suite; G2/G3 source-gated tests skip without GADRA_SOURCE_REPO)
         run: pytest -q -m "not gpu" examples/tests/
