@@ -53,7 +53,7 @@ the repo root) so SLURM file-path wrappers keep working.
 | `config/train.yaml` · `config/inference.yaml` | run-configs |
 | `config/deepspeed_zero2.yaml` | DeepSpeed ZeRO-2 for multi-GPU (copied verbatim from the paper's setup) |
 | `config/llama3.2-Instruct.jinja` | chat template (`--override chat_template_path=...`) |
-| `slurm/train.slurm` · `slurm/inference.slurm` | uv SLURM wrappers (offline two-phase; train = multi-GPU accelerate+ZeRO-2, inference = single-GPU eval) |
+| `slurm/` | uv SLURM wrappers + a [submission walkthrough](slurm/README.md) (offline two-phase; train = multi-GPU accelerate+ZeRO-2, inference = single-GPU eval) |
 | `tests/` | the processing / evaluation / convert parity tests + their goldens (`pytest examples/tests/`) |
 
 ## Data packing

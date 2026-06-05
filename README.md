@@ -187,7 +187,8 @@ judge and are method-equivalent (not bit-exact, since they call OpenAI).
 
 **SLURM** (offline compute nodes): set `GADRA_REPO`, pre-sync once on the login node
 (`uv sync --group gpu --locked`), then `sbatch examples/slurm/{train,inference}.slurm`. On an account/partition
-cluster set `export SBATCH_ACCOUNT=... SBATCH_PARTITION=...` once.
+cluster set `export SBATCH_ACCOUNT=... SBATCH_PARTITION=...` once. Full walkthrough:
+[`examples/slurm/README.md`](examples/slurm/README.md).
 
 ## Repository structure
 
