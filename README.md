@@ -202,6 +202,20 @@ See [`examples/README.md`](examples/README.md).
 **Out of scope:** other PEFT methods (MiLoRA / LoRA-Null / CLoRA) have upstream implementations; and the
 paper's per-token **analysis tooling** (contribution-ratio / γ extraction) stays in the research repo.
 
+## Contributing
+
+Issues and PRs are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Quick local check (exactly what CI runs):
+
+```bash
+ruff check src tests examples
+pytest -q -m "not gpu" tests/            # 27 method tests — no data/GPU needed
+pytest -q -m "not gpu" examples/tests/   # reproduction tooling
+uv lock --check
+```
+
+Hitting a snag? See the [FAQ / troubleshooting](docs/FAQ.md). Deeper docs:
+[`docs/DESIGN.md`](docs/DESIGN.md) (architecture) · [`examples/README.md`](examples/README.md) (reproduction).
+
 ## Security
 
 The optional MBPP eval executes model-generated code (`HF_ALLOW_CODE_EVAL=1`) — run it only in an isolated

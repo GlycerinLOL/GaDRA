@@ -13,6 +13,9 @@ Please report security issues **privately** via GitHub's **"Report a vulnerabili
 <https://github.com/GlycerinLOL/GaDRA/issues> asking for a private contact channel — **do not** put exploit
 details in a public issue. We aim to acknowledge promptly and to coordinate a fix and disclosure.
 
+In your report, please include: the affected version or commit, the environment (OS / Python / GPU), minimal
+reproduction steps, and the impact you observed.
+
 ## Executing model-generated code (MBPP eval)
 
 The optional MBPP evaluation (`examples/inference.py`, `task: mbpp`) **executes model-generated code** against

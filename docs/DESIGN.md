@@ -1,11 +1,10 @@
-# GaDRA-PEFT — Design & Refactor Plan (v4: +gadra.data +gadra.eval, diagnostics out)
+# GaDRA-PEFT — Design & Architecture
 
-> Status: P0–P4 method shipped; P5 reproduction validated (2026-06-04, new-package CPT matches canonical
-> MA_Gumbel_1.0 across BBC-QA/GSM8K/MBPP/TiEBe); P6.2 adds `gadra.data`. Scope widened to data+eval per
-> [STANDALONE_PLAN.md](STANDALONE_PLAN.md); per-token diagnostics remain out.
-> Basis: the submitted paper *"GaDRA: Learning When Not to Apply LoRA in Replay-Free Continual Pre-Training"*
-> (method §3–4, setup §5/§A.1), plus a 6-agent code investigation, internal critique, and Codex (gpt-5.5) cross-review.
-> Env confirmed by the paper itself (§A.2): PyTorch 2.6.0, **Transformers 4.53.3**; we pin **peft 0.16.0**, Python 3.12.
+> How the GaDRA paper's method maps to a HuggingFace `peft`-native custom tuner (`BaseTuner` /
+> `BaseTunerLayer`), and the numeric-parity protocol against the original research implementation.
+> Basis: the GaDRA paper *"Learning When Not to Apply LoRA in Replay-Free Continual Pre-Training"*
+> (method §3–4, setup §5 / §A.1). Pinned env (paper §A.2): PyTorch 2.6.0, Transformers 4.53.3,
+> peft 0.16.0, Python 3.12.
 
 ## 0. Purpose & scope
 
