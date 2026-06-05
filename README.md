@@ -7,15 +7,19 @@
 
 Official implementation of **GaDRA** (**Ga**ted **D**ual-conditioned **R**esidual **A**dapter), a HuggingFace
 [`peft`](https://github.com/huggingface/peft)-native PEFT method that learns *when **not** to apply* a LoRA
-update. GaDRA is model-agnostic (any HF `*ForCausalLM` via `target_modules` name-matching) and drops into the
-standard peft API — swap `LoraConfig` for `GaDRAConfig`.
+update. GaDRA is model-agnostic (HF causal LMs, via `target_modules` name-matching on linear projections;
+validated on Llama-3.1-8B-Instruct and Qwen3-8B) and drops into the standard peft API — swap `LoraConfig` for
+`GaDRAConfig`.
+
+_**Status:** paper under review · `pip install gadra` pending a PyPI release (install from source meanwhile) ·
+training/eval data and checkpoints are not redistributed — bring your own (see [Reproducing](#reproducing-the-paper))._
 
 > **TL;DR** — Replay-free continual pre-training (CPT) must absorb post-cutoff text without forgetting prior
 > skills. Always-on LoRA applies its residual at *every* token, indiscriminately. GaDRA adds a **per-position
 > hard binary gate** over the LoRA residual, **dual-conditioned** on the frozen module output `y⁰` and the
 > candidate residual `δ`, trained jointly with the LoRA factors via a Gumbel straight-through estimator. On
-> replay-free CPT of Llama-3.1-8B-Instruct, GaDRA **matches always-on LoRA on the target corpus while
-> substantially improving retention** of math, code, and time-sensitive factual QA — the best overall
+> replay-free CPT of Llama-3.1-8B-Instruct, GaDRA **stays comparable to always-on LoRA on the target corpus
+> while substantially improving retention** of math, code, and time-sensitive factual QA — the best overall
 > target–retention trade-off among compared LoRA-CPT preservation methods.
 
 ## Approach
@@ -27,18 +31,22 @@ standard peft API — swap `LoraConfig` for `GaDRAConfig`.
 frozen base output <code>y⁰</code> and the LoRA residual <code>δ</code>, decides whether to apply the residual;
 when it closes (<code>γₜ=0</code>) the module output is bit-identical to the frozen base.</em></p>
 
-For an adapted module at sequence position `t`, standard LoRA is always-on: `yₜ = yₜ⁰ + δₜ`, with
-`δₜ = α·B·A·xₜ`. GaDRA inserts a per-position gate `γₜ ∈ {0,1}`:
+For an adapted module at sequence position $t$, standard LoRA is always-on: $y_t = y_t^{0} + \delta_t$, with
+$\delta_t = \alpha\,BA\,x_t$. GaDRA inserts a per-position gate $\gamma_t \in \{0,1\}$:
 
-```
-yₜ = yₜ⁰ + γₜ · δₜ          γₜ = 1[ σ(zₜ) > 0.5 ]        zₜ = g([yₜ⁰ ; δₜ])
-```
+$$
+y_t = y_t^{0} + \gamma_t\,\delta_t
+\qquad
+\gamma_t = \mathbb{1}\!\left[\sigma(z_t) > 0.5\right]
+\qquad
+z_t = g\!\left(\left[\,y_t^{0};\,\delta_t\,\right]\right)
+$$
 
 - **Dual-conditioned gate** — the router `g` sees both the preserved behavior `yₜ⁰` and the proposed change
   `δₜ`, so it can tell a needed correction from a harmful perturbation. (`GaDRA-Mono` conditions on `δₜ` only.)
 - **Hard binary commitment** — when the gate closes (`γₜ=0`) the module output is *bit-identical* to the frozen
   base. Trained with a Gumbel-sigmoid straight-through estimator (`τ=1`, no annealing); deterministic
-  `1[σ(z)>0.5]` at inference. (`soft` variant uses a continuous `γ∈[0,1]`.)
+  `1[σ(z)>0.5]` at inference. (The `soft` ablation uses a continuous gate — the released code's `softplus(z)`.)
 - **Activation budget, not capacity** — the analysis shows GaDRA's gain comes from a learned *per-(layer×module)
   activation budget* (which modules stay active, and how often), not from smaller LoRA updates or token-level
   routing. A single global budget degrades acquisition.
@@ -55,9 +63,10 @@ into the base weights.
 
 ## Results
 
-Replay-free CPT of **Llama-3.1-8B-Instruct** (`r=512, α=1`) on two 2024 news corpora, averaged across corpora as
-mean improvement over the always-on **LoRA** anchor: `Δ_tgt` = target acquisition (BBC QA / CCQA), `Δ_ret` =
-retention (GSM8K / MBPP / TiEBe), `Overall = (Δ_tgt + Δ_ret) / 2`.
+Replay-free CPT of **Llama-3.1-8B-Instruct** (`r=512, α=1`) on two 2024 news corpora (BBC-News, 5,587 articles
+×15 paraphrase rewrites; CC-zh-TW-News, 5,340 ×14; rewrites by Llama-3.1-405B), averaged across corpora as mean
+improvement over the always-on **LoRA** anchor: `Δ_tgt` = target acquisition (BBC QA / CCQA), `Δ_ret` = retention
+(GSM8K math / MBPP code / TiEBe English time-sensitive factual QA), `Overall = (Δ_tgt + Δ_ret) / 2`.
 
 | Method | Δ target | Δ retention | **Overall** |
 |---|:---:|:---:|:---:|
@@ -82,20 +91,28 @@ stays active (≈0.99) and <code>up_proj</code> high (≈0.88), while most <code
 
 ## Installation
 
-**Use the method** (pip — pulls `peft==0.16.0`, `transformers==4.53.3`, nothing else):
+**Use the method** (method-only deps: `torch`, `transformers==4.53.3`, `peft==0.16.0`, `safetensors` — no
+data / eval / inference deps):
 
 ```bash
-pip install gadra
+pip install gadra                                      # once released on PyPI
+# until then, install the method from source:
+pip install "git+https://github.com/GlycerinLOL/GaDRA.git"
 ```
 
 **Reproduce the paper** — the training + inference workflow is managed with [uv](https://docs.astral.sh/uv/)
 (one environment for single- and multi-GPU; they install the same packages and differ only in the launch):
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh        # one-time
+# 1. install uv (one-time; it then fetches CPython 3.12 per .python-version — no system Python/conda needed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"                           # put uv on PATH in this shell (or restart the shell)
+# 2. clone the repo (uv reads pyproject.toml + uv.lock from here)
 git clone https://github.com/GlycerinLOL/GaDRA && cd GaDRA
-uv sync --group gpu                                     # cu124 torch + prebuilt flash-attn + deepspeed (no compile)
-huggingface-cli login                                  # gated base model
+# 3. create the pinned env: cu124 torch + prebuilt flash-attn + deepspeed (no compilation)
+uv sync --group gpu --locked
+# 4. authenticate for the gated base model (the CLI lives in the uv env, so run it via uv)
+uv run huggingface-cli login
 ```
 
 **Prerequisites** uv cannot install: an NVIDIA GPU with **driver ≥ 525.60.13** (the env uses the CUDA 12.4
@@ -135,7 +152,9 @@ model.generate(...)
 
 The reproduction tooling lives under [`examples/`](examples/) (repo-only — never shipped in the wheel). Data is
 **not** shipped: supply your own JSONL and point the config at it (see the
-[Data formats](examples/README.md) and the [FAQ](docs/FAQ.md)).
+[Data formats](examples/README.md) and the [FAQ](docs/FAQ.md)). The bundled run-configs reproduce the
+**Llama-3.1-8B × BBC-News** cell (target `bbcqa`; retention `gsm8k` / `mbpp` / `tiebe`); the CC-zh-TW-News
+column follows the same recipe with the Chinese corpus.
 
 ```bash
 # Train — GaDRA CPT (single GPU). Variants: --override router_conditioning=mono | --override gate=soft
