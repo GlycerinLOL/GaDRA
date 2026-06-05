@@ -1,116 +1,97 @@
-# GaDRA
+# GaDRA: Learning When Not to Apply LoRA in Replay-Free Continual Pre-Training
 
-A HuggingFace **`peft`-native** implementation of **GaDRA** (Gated Dual-conditioned Residual Adapter):
-a parameter-efficient adapter with a per-token, input-conditioned residual gate that learns *when not to
-apply* the LoRA update. Model-agnostic — works on any HF `*ForCausalLM` via standard `target_modules`
-name-matching. This is the official open-source implementation of the GaDRA paper.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![peft 0.16.0](https://img.shields.io/badge/peft-0.16.0-orange.svg)](https://github.com/huggingface/peft)
+[![CI](https://github.com/GlycerinLOL/GaDRA/actions/workflows/ci.yml/badge.svg)](https://github.com/GlycerinLOL/GaDRA/actions/workflows/ci.yml)
 
-## Why this repo exists
+Official implementation of **GaDRA** (**Ga**ted **D**ual-conditioned **R**esidual **A**dapter), a HuggingFace
+[`peft`](https://github.com/huggingface/peft)-native PEFT method that learns *when **not** to apply* a LoRA
+update. GaDRA is model-agnostic (any HF `*ForCausalLM` via `target_modules` name-matching) and drops into the
+standard peft API — swap `LoraConfig` for `GaDRAConfig`.
 
-The original research implementation hard-bound GaDRA to Llama by reimplementing the whole decoder stack
-(~2600 lines) just to thread per-token gate values through the forward pass. This package re-expresses GaDRA
-as a `BaseTuner` / `BaseTunerLayer` custom method registered via `peft.utils.register_peft_method`, so you
-call it through the normal peft API — swap `LoraConfig` for `GaDRAConfig` and nothing else changes (except
-that GaDRA is non-mergeable).
+> **TL;DR** — Replay-free continual pre-training (CPT) must absorb post-cutoff text without forgetting prior
+> skills. Always-on LoRA applies its residual at *every* token, indiscriminately. GaDRA adds a **per-position
+> hard binary gate** over the LoRA residual, **dual-conditioned** on the frozen module output `y⁰` and the
+> candidate residual `δ`, trained jointly with the LoRA factors via a Gumbel straight-through estimator. On
+> replay-free CPT of Llama-3.1-8B-Instruct, GaDRA **matches always-on LoRA on the target corpus while
+> substantially improving retention** of math, code, and time-sensitive factual QA — the best overall
+> target–retention trade-off among compared LoRA-CPT preservation methods.
 
-## Install
+## Approach
 
-```bash
-pip install gadra        # pulls peft==0.16.0, transformers==4.53.3
+For an adapted module at sequence position `t`, standard LoRA is always-on: `yₜ = yₜ⁰ + δₜ`, with
+`δₜ = α·B·A·xₜ`. GaDRA inserts a per-position gate `γₜ ∈ {0,1}`:
+
+```
+yₜ = yₜ⁰ + γₜ · δₜ          γₜ = 1[ σ(zₜ) > 0.5 ]        zₜ = g([yₜ⁰ ; δₜ])
 ```
 
-Importing the package registers the `gadra` method with peft (adds `PeftType.GADRA`). This is the method
-only — zero data/eval/inference dependencies. To **reproduce the paper** from a checkout, use uv (below).
+- **Dual-conditioned gate** — the router `g` sees both the preserved behavior `yₜ⁰` and the proposed change
+  `δₜ`, so it can tell a needed correction from a harmful perturbation. (`GaDRA-Mono` conditions on `δₜ` only.)
+- **Hard binary commitment** — when the gate closes (`γₜ=0`) the module output is *bit-identical* to the frozen
+  base. Trained with a Gumbel-sigmoid straight-through estimator (`τ=1`, no annealing); deterministic
+  `1[σ(z)>0.5]` at inference. (`soft` variant uses a continuous `γ∈[0,1]`.)
+- **Activation budget, not capacity** — the analysis shows GaDRA's gain comes from a learned *per-(layer×module)
+  activation budget* (which modules stay active, and how often), not from smaller LoRA updates or token-level
+  routing. A single global budget degrades acquisition.
 
-## Reproduce the paper (uv)
+GaDRA is **non-mergeable** by design: the gate is per-token and input-dependent, so the adapter cannot be folded
+into the base weights.
 
-The repo's training + inference workflow is managed with [uv](https://docs.astral.sh/uv/). One environment
-covers single-GPU and multi-GPU (they install the same packages; multi-GPU only changes the launch).
+| Variant | `router_conditioning` | `gate` |
+|---|---|---|
+| **GaDRA** | `dual` | `hard` |
+| GaDRA-Mono | `mono` | `hard` |
+| GaDRA-Soft | `dual` | `soft` |
+| GaDRA-Mono-Soft | `mono` | `soft` |
 
-**Prerequisites** (uv cannot install these — they are host-level):
-- NVIDIA GPU with **driver ≥ 525.60.13** (the env uses the CUDA 12.4 runtime, bundled in the torch wheel).
-- Linux x86_64, glibc ≥ 2.17 (uv-managed CPython 3.12 + all wheels are manylinux2014).
-- ~25 GB disk for the env + cached wheels.
-- A Hugging Face account with access to the **gated** base model: request access to
-  `meta-llama/Llama-3.1-8B-Instruct`, then `huggingface-cli login` (or set `HF_TOKEN`).
+## Results
 
-### 1. Environment
+Replay-free CPT of **Llama-3.1-8B-Instruct** (`r=512, α=1`) on two 2024 news corpora, averaged across corpora as
+mean improvement over the always-on **LoRA** anchor: `Δ_tgt` = target acquisition (BBC QA / CCQA), `Δ_ret` =
+retention (GSM8K / MBPP / TiEBe), `Overall = (Δ_tgt + Δ_ret) / 2`.
 
-```bash
-# install uv (one-time; no conda, no system python — uv fetches CPython 3.12 per .python-version)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+| Method | Δ target | Δ retention | **Overall** |
+|---|:---:|:---:|:---:|
+| LoRA (always-on, anchor) | — | — | — |
+| MiLoRA | +0.47 | −15.81 | −7.67 |
+| LoRA-Null | −3.05 | −21.81 | −12.43 |
+| CLoRA | −3.43 | +6.81 | +1.69 |
+| GaDRA-Mono | −5.15 | +11.56 | +3.21 |
+| **GaDRA** | **−1.48** | **+11.08** | **+4.80** |
 
-# clone + create the GPU env (cu124 torch + prebuilt flash-attn + deepspeed; no compilation)
-git clone <repo-url> GaDRA && cd GaDRA
-uv sync --group gpu
-huggingface-cli login                          # for the gated Llama base model
-```
+GaDRA stays at near-parity on the target corpus (Δ_tgt −1.48) while recovering retention that always-on LoRA
+loses (Δ_ret +11.08), for the **best overall trade-off**. A **Qwen3-8B** cross-architecture probe shows the same
+direction (Overall **+4.73**). See the paper for the full per-corpus tables, the dual×hard ablation, and the
+gate-intervention analysis.
 
-### 2. Data (not shipped — you provide it)
+## Installation
 
-The run-configs point at `data/*.jsonl` placeholders; supply your own files and edit the config (or
-`--override train_file=...`). Formats:
-- **Training corpus** (`train_file`): JSONL, one `{"text": "..."}` per line (continual-pretraining text).
-  The paper uses BBC-News / CC news corpora — see the paper for sourcing; any in-domain text in this format works.
-- **Eval sets** (`eval_file`): JSONL — `task: qa` → `{"prompt": "...", "answer": "..."}`;
-  `task: gsm8k` → `{"prompt": "...", "answers": ["..."]}`. GSM8K / MBPP are public; format them to this schema.
-
-### 3. Train
-
-```bash
-# GaDRA (default: dual gate, hard/Gumbel) — single GPU
-uv run python -m examples.train --config examples/config/train.yaml
-#   variants, one override each:  --override router_conditioning=mono   (GaDRA-Mono)
-#                                 --override gate=soft                   (GaDRA-Soft)
-
-# LoRA baseline (stock peft — the method GaDRA is compared against)
-uv run python -m examples.train_lora_baseline --config examples/config/train_lora.yaml
-
-# multi-GPU (any of the above) = the paper's workflow: accelerate launch + DeepSpeed ZeRO-2
-uv run accelerate launch --num_processes <N_GPUS> \
-    --config_file examples/config/deepspeed_zero2.yaml \
-    -m examples.train --config examples/config/train.yaml
-```
-
-### 4. Inference / eval
+**Use the method** (pip — pulls `peft==0.16.0`, `transformers==4.53.3`, nothing else):
 
 ```bash
-# deterministic (no key): task: qa | gsm8k | mbpp
-uv run python -m examples.inference --config examples/config/inference.yaml
-
-# GPT-judged "Correct %": task: bbcqa | tiebe  (key from the environment — never the repo)
-export OPENAI_API_KEY=sk-...
-uv run python -m examples.inference --config examples/config/inference.yaml --override task=bbcqa
+pip install gadra
 ```
 
-The eval derives the prompt / reference / judge inputs from each sample the same way the research harness
-does (prompt from `text`/`messages`/`question`, reference from `messages[-1]`, question from `messages[-2]`,
-BBC-QA judge document from a `documents_file` keyed by `id`), so the paper's **raw** eval files work directly.
-Same chat template + greedy params ⇒ the **deterministic** numbers (QA char-F1/EM, GSM8K EM, MBPP pass@1)
-reproduce bit-for-bit. **BBC-QA / TiEBe** use the verbatim GPT judge (`bbcqa` / `tiebe`) for the paper's
-"Correct %" — these need `OPENAI_API_KEY` in the environment (BBC-QA also needs `documents_file:` pointing at
-the source-article JSONL) and are judge-dependent (not bit-exact, since they call OpenAI). No key is ever
-stored in the repo. (MBPP needs `HF_ALLOW_CODE_EVAL=1`.)
+**Reproduce the paper** — the training + inference workflow is managed with [uv](https://docs.astral.sh/uv/)
+(one environment for single- and multi-GPU; they install the same packages and differ only in the launch):
 
-### 5. SLURM (offline compute nodes)
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh        # one-time
+git clone https://github.com/GlycerinLOL/GaDRA && cd GaDRA
+uv sync --group gpu                                     # cu124 torch + prebuilt flash-attn + deepspeed (no compile)
+huggingface-cli login                                  # gated base model
+```
 
-Set `GADRA_REPO` to your shared-filesystem checkout, pre-sync once on the login node
-(`uv sync --group gpu --locked`), then submit — [`examples/slurm/train.slurm`](examples/slurm/train.slurm)
-(multi-GPU train, accelerate + ZeRO-2) and [`examples/slurm/inference.slurm`](examples/slurm/inference.slurm)
-(single-GPU eval). Both handle the offline/uv flags; the inference wrapper reads `OPENAI_API_KEY` from the
-submitting environment for `bbcqa`/`tiebe` (never from the repo). On an account/partition cluster, set
-`export SBATCH_ACCOUNT=<account> SBATCH_PARTITION=<partition>` once (Slurm reads them — no file edit).
+**Prerequisites** uv cannot install: an NVIDIA GPU with **driver ≥ 525.60.13** (the env uses the CUDA 12.4
+runtime bundled in the torch wheel), Linux x86_64 (glibc ≥ 2.17), and Hub access to the gated
+`meta-llama/Llama-3.1-8B-Instruct`. See the [FAQ](docs/FAQ.md) for common install issues.
 
-The default packing (`fa2_collator`) is paper-faithful and needs flash-attention-2 (installed by the `gpu`
-group as a prebuilt wheel — no build). For a machine without the matching wheel, use the portable SDPA path:
-`--override packing=group` (not bit-exact to the paper). See [`examples/README.md`](examples/README.md).
-
-## Usage
-
-### Train (standard `transformers.Trainer`, plain LM loss)
+## Quick start
 
 ```python
-import gadra                              # side-effect: registers the "gadra" method
+import gadra                                   # side-effect: registers the "gadra" method with peft
 from gadra import GaDRAConfig
 from peft import get_peft_model
 from transformers import AutoModelForCausalLM, Trainer
@@ -119,102 +100,103 @@ base = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
 cfg = GaDRAConfig(
     r=512, lora_alpha=1, lora_dropout=0.05,
     target_modules=["up_proj", "gate_proj", "down_proj"],
-    router_conditioning="dual",   # "dual" = GaDRA | "mono" = GaDRA-Mono
-    gate="hard",                  # "hard" = Gumbel-STE | "soft"
+    router_conditioning="dual",                # "dual" = GaDRA | "mono" = GaDRA-Mono
+    gate="hard",                               # "hard" = Gumbel-STE | "soft"
     task_type="CAUSAL_LM",
 )
 model = get_peft_model(base, cfg)
-model.print_trainable_parameters()
-Trainer(model=model, args=..., train_dataset=...).train()   # no custom trainer, no aux loss
+Trainer(model=model, args=..., train_dataset=...).train()   # stock Trainer, plain LM loss — no custom loop
 model.save_pretrained("out/")
 ```
 
-A config-driven runnable script with the paper's §A.1 recipe is [`examples/train.py`](examples/train.py) —
-run it as `uv run python -m examples.train --config examples/config/train.yaml` from a repo checkout
-(repo-only tooling; see [Reproduce the paper](#reproduce-the-paper-uv) and [Scope](#scope)).
-
-### Generate
+Load and generate with the standard peft API (the gate stays attached — non-mergeable):
 
 ```python
-import gadra
 from peft import PeftModel
-from transformers import AutoModelForCausalLM
-
-base = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
-model = PeftModel.from_pretrained(base, "out/")     # gate stays attached (non-mergeable)
+model = PeftModel.from_pretrained(base, "out/")
 model.generate(...)
 ```
 
-For quick interactive generation, use the standard peft API (above). For paper-repro **evaluation**, see
-[`examples/inference.py`](examples/inference.py) and [Reproduce → Inference](#4-inference--eval).
+## Reproducing the paper
 
-### Variants
+The reproduction tooling lives under [`examples/`](examples/) (repo-only — never shipped in the wheel). Data is
+**not** shipped: supply your own JSONL and point the config at it (see the
+[Data formats](examples/README.md) and the [FAQ](docs/FAQ.md)).
 
-| Variant | `router_conditioning` | `gate` |
-|---|---|---|
-| GaDRA | `dual` | `hard` |
-| GaDRA-Mono | `mono` | `hard` |
-| GaDRA-Soft | `dual` | `soft` |
-| GaDRA-Mono-Soft | `mono` | `soft` |
+```bash
+# Train — GaDRA CPT (single GPU). Variants: --override router_conditioning=mono | --override gate=soft
+uv run python -m examples.train --config examples/config/train.yaml
 
-### Non-mergeable
+# Train — multi-GPU (the paper's setup: accelerate + DeepSpeed ZeRO-2)
+uv run accelerate launch --num_processes <N_GPUS> \
+    --config_file examples/config/deepspeed_zero2.yaml \
+    -m examples.train --config examples/config/train.yaml
 
-GaDRA's gate is per-token and input-dependent, so the adapter cannot be folded into the base weights.
-`merge_and_unload()` / `merge_adapter()` raise a clear `NotImplementedError` by design — keep the adapter
-attached at inference.
+# LoRA baseline (stock peft.LoraConfig — the always-on anchor)
+uv run python -m examples.train_lora_baseline --config examples/config/train_lora.yaml
 
-## Convert a legacy checkpoint (repo tooling)
+# Evaluate — deterministic, no key:  task: qa | gsm8k | mbpp  (MBPP needs HF_ALLOW_CODE_EVAL=1)
+uv run python -m examples.inference --config examples/config/inference.yaml
 
-Checkpoints from the original research code (`peft_config.json` + `peft_model.bin`) convert to the peft
-format with the repo-only converter under `examples/` (not part of the pip package — clone the repo and
-`uv sync --group gpu`):
-
-```python
-from examples.convert import convert_checkpoint   # run from a repo checkout, not `pip install gadra`
-convert_checkpoint("old_ckpt/", "out/")   # writes adapter_config.json + adapter_model.safetensors
+# Evaluate — GPT-judged "Correct %":  task: bbcqa | tiebe   (key from the environment, never the repo)
+export OPENAI_API_KEY=sk-...
+uv run python -m examples.inference --config examples/config/inference.yaml --override task=bbcqa
 ```
 
-## Method (paper)
+The eval derives each sample's prompt / reference / judge inputs exactly as the research harness does, so the
+paper's **raw** eval files work directly. Same tokenizer + chat template + greedy params ⇒ the **deterministic**
+metrics (QA char-F1/EM, GSM8K EM, MBPP pass@1) reproduce bit-for-bit; **BBC-QA / TiEBe** use the verbatim GPT
+judge and are method-equivalent (not bit-exact, since they call OpenAI).
 
-Output `y = y⁰ + γ·δ`, with `δ = α·B·A·x` and a per-module affine gate producing the per-token scalar `γ`:
-the **dual** gate conditions on `[y⁰; δ]` (GaDRA), the **mono** gate on `δ` only. `γ` is binary via a
-Gumbel-sigmoid straight-through estimator during training (deterministic `1[σ(z) > 0.5]` at inference), or a
-continuous `soft` gate. The default config (`r=512, α=1`, on `up_proj`/`gate_proj`/`down_proj`) is paper-faithful.
+**SLURM** (offline compute nodes): set `GADRA_REPO`, pre-sync once on the login node
+(`uv sync --group gpu --locked`), then `sbatch examples/slurm/{train,inference}.slurm`. On an account/partition
+cluster set `export SBATCH_ACCOUNT=... SBATCH_PARTITION=...` once.
 
-## Environment
+## Repository structure
 
-Pinned to `peft==0.16.0`, `transformers==4.53.3`, Python 3.12. See [`docs/DESIGN.md`](docs/DESIGN.md) for the
-full architecture mapping, phased plan, and numeric-parity protocol.
+```
+src/gadra/             # the pip-installable METHOD ONLY (zero data/eval deps)
+  config.py            #   GaDRAConfig (LoraConfig-idiomatic)
+  layer.py / gate.py   #   GaDRALinear + the gate (Gumbel-STE / softplus)
+  model.py / _register.py  # BaseTuner + register_peft_method wiring
+examples/              # repo-only reproduction tooling (NOT in the wheel)
+  train.py / inference.py / train_lora_baseline.py   # config-driven entries
+  processing.py / evaluation.py / convert.py         # data / scorers+judge / legacy-ckpt converter
+  config/              #   run-configs + DeepSpeed ZeRO-2 + chat template
+  slurm/               #   uv SLURM wrappers
+tests/ · examples/tests/   # method purity/parity gates + reproduction parity goldens
+docs/DESIGN.md         # architecture mapping + numeric-parity protocol
+```
 
-## Scope
+Convert a legacy research-code checkpoint (`peft_config.json` + `peft_model.bin`) to the peft format with the
+repo-only converter: `from examples.convert import convert_checkpoint`.
 
-**The pip package (`pip install gadra`) is the method only** — the GaDRA tuner + the standard peft/Trainer
-training path, with zero data / eval / inference dependencies. It is a clean, model-agnostic `peft` variant
-you can drop into any project.
+## Citation
 
-**Reproducing the paper** uses the repo-only tooling under [`examples/`](examples/) (never shipped in the
-wheel): `examples/processing.py` (the parity-exact FA2 packing / EOS-append / tokenizer that fed the paper's
-CPT), `examples/evaluation.py` (the verbatim BBC-QA / GSM8K / MBPP / TiEBe scorers + greedy runner), and
-`examples/convert.py` (the legacy-checkpoint converter), driven by `examples/train.py` / `examples/inference.py`
-+ `examples/config/`. Clone the repo and `uv sync --group gpu` (see [Reproduce the paper](#reproduce-the-paper-uv)).
-See [`examples/README.md`](examples/README.md).
+If you use GaDRA, please cite the paper (machine-readable metadata in [`CITATION.cff`](CITATION.cff); GitHub's
+"Cite this repository" renders it). The paper is under review — the full citation will be added upon publication.
 
-**Out of scope:** other PEFT methods (MiLoRA / LoRA-Null / CLoRA) have upstream implementations; and the
-paper's per-token **analysis tooling** (contribution-ratio / γ extraction) stays in the research repo.
+```bibtex
+@misc{gadra2026,
+  title  = {GaDRA: Learning When Not to Apply LoRA in Replay-Free Continual Pre-Training},
+  year   = {2026},
+  note   = {Code: https://github.com/GlycerinLOL/GaDRA}
+}
+```
 
 ## Contributing
 
-Issues and PRs are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Quick local check (exactly what CI runs):
+Issues and PRs welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Quick local check (exactly what CI runs):
 
 ```bash
 ruff check src tests examples
-pytest -q -m "not gpu" tests/            # 27 method tests — no data/GPU needed
+pytest -q -m "not gpu" tests/            # method suite (no data/GPU needed)
 pytest -q -m "not gpu" examples/tests/   # reproduction tooling
 uv lock --check
 ```
 
-Hitting a snag? See the [FAQ / troubleshooting](docs/FAQ.md). Deeper docs:
-[`docs/DESIGN.md`](docs/DESIGN.md) (architecture) · [`examples/README.md`](examples/README.md) (reproduction).
+Common pitfalls: [FAQ](docs/FAQ.md). Deeper design notes: [`docs/DESIGN.md`](docs/DESIGN.md),
+[`examples/README.md`](examples/README.md).
 
 ## Security
 
@@ -225,8 +207,3 @@ environment. No secrets are stored in the repo; the GPT judge reads `OPENAI_API_
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
-
-## Citation
-
-If you use GaDRA, please cite it via [`CITATION.cff`](CITATION.cff) (GitHub renders a "Cite this repository"
-button). The accompanying paper citation will be added upon publication.
