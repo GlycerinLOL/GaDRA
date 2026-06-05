@@ -154,11 +154,25 @@ model.generate(...)
 
 ## Reproducing the paper
 
-The reproduction tooling lives under [`examples/`](examples/) (repo-only — never shipped in the wheel). Data is
-**not** shipped: supply your own JSONL and point the config at it (see the
-[Data formats](examples/README.md) and the [FAQ](docs/FAQ.md)). The bundled run-configs reproduce the
-**Llama-3.1-8B × BBC-News** cell (target `bbcqa`; retention `gsm8k` / `mbpp` / `tiebe`); the CC-zh-TW-News
-column follows the same recipe with the Chinese corpus.
+The reproduction tooling lives under [`examples/`](examples/) (repo-only — never shipped in the wheel). The
+bundled run-configs reproduce the **Llama-3.1-8B × BBC-News** cell (target `bbcqa`; retention `gsm8k` /
+`mbpp` / `tiebe`); the CC-zh-TW-News column follows the same recipe with the Chinese corpus.
+
+### Data (you provide it)
+
+Data is **not** shipped. Put your JSONL files anywhere readable — a `data/` dir at the repo root is the default
+(and is gitignored); for SLURM it must be on the **shared filesystem**. Then set the path in the run-config:
+the configs already point at `data/*.jsonl` placeholders, so either drop your files there or override the path.
+Paths are relative to the repo root (the entry scripts run from there).
+
+| Workflow | Config | Field(s) | Format — one JSON object per line |
+|---|---|---|---|
+| **CPT** (`examples.train`) | [`config/train.yaml`](examples/config/train.yaml) | `train_file` (+ optional `validation_file`) | `{"text": "..."}` — raw continual-pretraining text |
+| **Eval** (`examples.inference`) | [`config/inference.yaml`](examples/config/inference.yaml) | `eval_file` (+ `documents_file` for `bbcqa`) | the paper's raw files work as-is — `{"id": ..., "messages": [...]}`, or `{"question": ..., "answers": [...]}` / `{"prompt": ..., "answer": ...}` |
+
+Per-task eval fields (`qa` / `gsm8k` / `mbpp` / `bbcqa` / `tiebe`) are documented inline in
+[`config/inference.yaml`](examples/config/inference.yaml). Override a path without editing the file:
+`--override train_file=path.jsonl` / `--override eval_file=path.jsonl`.
 
 ```bash
 # Train — GaDRA CPT (single GPU). Variants: --override router_conditioning=mono | --override gate=soft

@@ -32,3 +32,12 @@ tests/_golden/scratch/
 # OSS hardening scaffolding (audit/plan/refactor/test-strategy/ci skill outputs) — local working
 # notes only; some cite the maintainer's host path, so they are never committed to the public repo.
 OSS_*.md
+
+# User-provided data + run outputs (never committed)
+data/
+out/
+slurm-logs/
+
+# uv cache / managed python placed inside the repo by the SLURM two-phase setup
+.uv-cache/
+.uv-python/

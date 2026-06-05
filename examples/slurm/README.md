@@ -103,9 +103,18 @@ tail -f slurm-logs/<jobid>.err               # errors
 
 ## Data
 
-Data is **not** shipped. Supply your own JSONL and point the configs at it:
-- Training (`train_file`): one `{"text": "..."}` per line (continual-pretraining text).
-- Eval (`eval_file`): the paper's raw files work directly — see [`examples/README.md`](../README.md) for formats.
+Data is **not** shipped — you provide it. For SLURM the files must live on the **shared filesystem** (readable
+from the offline compute nodes); the simplest place is a `data/` dir inside `$GADRA_REPO` (it's gitignored), and
+config paths are relative to the repo root.
+
+- **CPT** — set `train_file` (+ optional `validation_file`) in [`../config/train.yaml`](../config/train.yaml);
+  format: one `{"text": "..."}` per line.
+- **Inference** — set `eval_file` (+ `documents_file` for `bbcqa`) in
+  [`../config/inference.yaml`](../config/inference.yaml); the paper's raw files work directly.
+
+Set the paths by editing the YAML, or add `--override train_file=...` / `--override eval_file=...` to the
+`examples.train` / `examples.inference` line in the script. Full format spec:
+[repo README → Data](../../README.md#data-you-provide-it).
 
 ## Troubleshooting
 

@@ -34,7 +34,7 @@ uv run python -m examples.inference --config examples/config/inference.yaml
 
 **Data is not shipped.** The configs point at `data/*.jsonl` placeholders — supply your own and edit the
 config (or `--override train_file=... eval_file=...`). See the repo
-[README → Data](../README.md#2-data-not-shipped--you-provide-it) for the JSONL formats and sourcing.
+[README → Data](../README.md#data-you-provide-it) for the JSONL formats, fields, and where to put the files.
 
 Override any config field on the CLI (YAML-typed): `--override learning_rate=5e-4 --override packing=group`.
 The scripts also tolerate a direct `python examples/<script>.py` invocation (a small `sys.path` shim adds
