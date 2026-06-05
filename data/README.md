@@ -1,0 +1,19 @@
+# `data/`
+
+This directory is where you put the **datasets you provide** for reproduction — GaDRA ships **no** data.
+
+Everything in here is **gitignored except this README**, so your corpora / eval files are never committed.
+(For SLURM, this directory must live on the shared filesystem so the offline compute nodes can read it.)
+
+## What goes here
+
+| File (default path in the configs) | Used by | Format — one JSON object per line |
+|---|---|---|
+| `corpus.jsonl` | CPT — `train_file` in [`../examples/config/train.yaml`](../examples/config/train.yaml) | `{"text": "..."}` — raw continual-pretraining text |
+| `gsm8k_test.jsonl`, `bbcqa_test.jsonl`, … | eval — `eval_file` in [`../examples/config/inference.yaml`](../examples/config/inference.yaml) | the paper's raw eval files work as-is |
+| _(bbcqa)_ a documents JSONL | eval — `documents_file` in `inference.yaml` (the GPT judge's source articles, keyed by `id`) | `{"id": ..., "text": ...}` |
+
+Keep the default file names above, or point the config at your paths
+(`--override train_file=data/<your>.jsonl` / `--override eval_file=data/<your>.jsonl`).
+
+Full format spec + per-task fields: the repo [README → Data](../README.md#data-you-provide-it).

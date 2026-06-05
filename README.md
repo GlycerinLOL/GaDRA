@@ -160,10 +160,11 @@ bundled run-configs reproduce the **Llama-3.1-8B × BBC-News** cell (target `bbc
 
 ### Data (you provide it)
 
-Data is **not** shipped. Put your JSONL files anywhere readable — a `data/` dir at the repo root is the default
-(and is gitignored); for SLURM it must be on the **shared filesystem**. Then set the path in the run-config:
-the configs already point at `data/*.jsonl` placeholders, so either drop your files there or override the path.
-Paths are relative to the repo root (the entry scripts run from there).
+Data is **not** shipped. The repo keeps a [`data/`](data/) dir at the root (its [`README`](data/README.md)
+lists what goes where; your data files there are gitignored) — drop your JSONL in it, or put it anywhere
+readable and set the path. For SLURM it must be on the **shared filesystem**. The configs already point at
+`data/*.jsonl` placeholders, so either use those names or override the path. Paths are relative to the repo
+root (the entry scripts run from there).
 
 | Workflow | Config | Field(s) | Format — one JSON object per line |
 |---|---|---|---|
@@ -178,7 +179,8 @@ Per-task eval fields (`qa` / `gsm8k` / `mbpp` / `bbcqa` / `tiebe`) are documente
 # Train — GaDRA CPT (single GPU). Variants: --override router_conditioning=mono | --override gate=soft
 uv run python -m examples.train --config examples/config/train.yaml
 
-# Train — multi-GPU (the paper's setup: accelerate + DeepSpeed ZeRO-2)
+# Train — multi-GPU (accelerate + DeepSpeed ZeRO-2). For N GPUs, hold the paper's global batch size 128 with
+#   --override gradient_accumulation_steps=$((128/(16*N)))   — the SLURM wrapper computes this automatically.
 uv run accelerate launch --num_processes <N_GPUS> \
     --config_file examples/config/deepspeed_zero2.yaml \
     -m examples.train --config examples/config/train.yaml
@@ -218,6 +220,7 @@ examples/              # repo-only reproduction tooling (NOT in the wheel)
   slurm/               #   uv SLURM wrappers
 tests/ · examples/tests/   # method purity/parity gates + reproduction parity goldens
 docs/DESIGN.md         # architecture mapping + numeric-parity protocol
+data/                  # YOU drop the CPT corpus + eval JSONL here (gitignored; see data/README.md)
 ```
 
 Convert a legacy research-code checkpoint (`peft_config.json` + `peft_model.bin`) to the peft format with the

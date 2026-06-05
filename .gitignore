@@ -33,8 +33,10 @@ tests/_golden/scratch/
 # notes only; some cite the maintainer's host path, so they are never committed to the public repo.
 OSS_*.md
 
-# User-provided data + run outputs (never committed)
-data/
+# User-provided data + run outputs (never committed). The data/ dir itself is kept (via data/README.md)
+# so a fresh clone has the place to drop files in; only your data files are ignored.
+data/*
+!data/README.md
 out/
 slurm-logs/
 
