@@ -33,8 +33,14 @@
 
 set -euo pipefail
 
-# --- Paths: EDIT to your shared filesystem (must be visible from BOTH login and compute nodes) ---
-REPO="${GADRA_REPO:-/path/to/shared/GaDRA}"
+# --- Repo root: GADRA_REPO wins; else the dir you ran `sbatch` from (SLURM_SUBMIT_DIR), else $PWD. Set
+# machine-specific vars in a sourced env file rather than editing this script — see examples/slurm/env.local.sh.example ---
+REPO="${GADRA_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
+if [ ! -e "${REPO}/pyproject.toml" ]; then
+    echo "ERROR: GADRA_REPO='${REPO}' is not the GaDRA repo root (no pyproject.toml there)." >&2
+    echo "       Set GADRA_REPO (e.g. via examples/slurm/env.local.sh), or submit from the repo root." >&2
+    exit 2
+fi
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$REPO/.uv-cache}"
 export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$REPO/.uv-python}"
 # cache and .venv may sit on different mounts on HPC -> copy instead of hardlink to avoid cross-FS failures.

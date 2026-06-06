@@ -23,31 +23,40 @@ conda. Two wrappers live here:
 
 ## 1. One-time setup (login node — has internet)
 
-```bash
-# Clone onto the shared filesystem and point uv's cache + python there (so compute nodes can reuse them).
-git clone https://github.com/GlycerinLOL/GaDRA /path/to/shared/GaDRA
-export GADRA_REPO=/path/to/shared/GaDRA
-export UV_CACHE_DIR="$GADRA_REPO/.uv-cache"
-export UV_PYTHON_INSTALL_DIR="$GADRA_REPO/.uv-python"
+All machine-specific settings (repo path, account/partition, secrets) live in **one sourced file**, so you
+never edit the committed `.slurm` scripts. Copy the template, fill it in, and keep it out of git:
 
-# Build the pinned env (cu124 torch + prebuilt flash-attn + deepspeed; no compilation). Downloads everything
-# into the cache above; commits nothing.
-cd "$GADRA_REPO" && uv sync --group gpu --locked
+```bash
+# Clone onto the shared filesystem (visible from login + compute nodes).
+git clone https://github.com/GlycerinLOL/GaDRA /path/to/shared/GaDRA
+cd /path/to/shared/GaDRA
+
+# Create your machine-local env file (gitignored) from the template, then edit it.
+cp examples/slurm/env.local.sh.example examples/slurm/env.local.sh
+$EDITOR examples/slurm/env.local.sh        # set GADRA_REPO, SBATCH_ACCOUNT/PARTITION, OPENAI_API_KEY, ...
+
+# Source it, then build the pinned env (cu124 torch + prebuilt flash-attn + deepspeed; no compilation).
+source examples/slurm/env.local.sh
+uv sync --group gpu --locked
 
 # Cache your HF token (the CLI lives in the uv env) and pre-download the gated base model while online.
 uv run huggingface-cli login
 uv run python -c "from huggingface_hub import snapshot_download; snapshot_download('meta-llama/Llama-3.1-8B-Instruct')"
 ```
 
-These three exports (`GADRA_REPO`, `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`) must be **set in the shell you
-submit from** — `sbatch` forwards the submitting environment to the job by default, which is how the offline
-compute node finds the login-node env. Put them in your `~/.bashrc` (or re-export them each session).
-
-On an **account/partition** cluster (e.g. nano5), also set these once — Slurm reads them, no file edit:
+From then on, **every session** you just `source` the env file before submitting (or add the `source` line to
+your `~/.bashrc`):
 
 ```bash
-export SBATCH_ACCOUNT=<account> SBATCH_PARTITION=<partition>
+source examples/slurm/env.local.sh
+sbatch examples/slurm/train.slurm          # or examples/slurm/inference.slurm
 ```
+
+Why sourced and not baked into the scripts: `sbatch` reads `SBATCH_ACCOUNT` / `SBATCH_PARTITION` from the
+**submitting** shell and forwards the whole environment to the job by default — so one `source` covers both the
+scheduler knobs and the runtime vars (`GADRA_REPO`, `UV_*`, `OPENAI_API_KEY`, `CONFIG`, `ADAPTER`, …). The
+scripts resolve the repo root as `GADRA_REPO` → the dir you ran `sbatch` from → `$PWD`, and abort with a clear
+message if that isn't the repo, so submitting from the repo root works even without `GADRA_REPO` set.
 
 ## 2. Submit training
 

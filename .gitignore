@@ -44,3 +44,7 @@ slurm-logs/
 # uv cache / managed python placed inside the repo by the SLURM two-phase setup
 .uv-cache/
 .uv-python/
+
+# Machine-local SLURM env (secrets + host paths) — copied from env.local.sh.example, sourced before sbatch
+examples/slurm/env.local.sh
+env.local.sh
