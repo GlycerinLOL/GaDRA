@@ -4,9 +4,10 @@
 
 # --- Model + data ---
 model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
-train_file: data/corpus.jsonl                 # JSONL with a "text" field per line (PT format) — see README "Data"
+train_file: data/BBC_news_alltime/Pretraining/v2-subset_5587/train_5587-eot.jsonl                 # JSONL with a "text" field per line (PT format)
+validation_file: data/BBC_news_alltime/Pretraining/v2-subset_5587/valid_5587-eot.jsonl          # optional held-out JSONL (same "text" format); set it to enable eval during training
 output_dir: out/lora-bbc
-chat_template_path: examples/config/llama3.2-Instruct.jinja
+chat_template_path: examples/config/llama3.2-Instruct.jinja   # optional; unused for plain PT text
 packing: fa2_collator                         # fa2_collator (paper-faithful, needs FA2) | group (portable, SDPA)
 
 # --- LoRA adapter (matched to GaDRA's adapter for a fair baseline) ---
@@ -15,17 +16,41 @@ lora_alpha: 1.0
 lora_dropout: 0.05
 target_modules: [up_proj, gate_proj, down_proj]
 
-# --- Training recipe (same recipe as the GaDRA run; set the LoRA-baseline cell of Table 8 if it differs) ---
+# --- Training recipe (same recipe as the GaDRA run: train.py + train.yaml) ---
+# LR/warmup are the BBC cell of the paper's Table 8 — set the LoRA-baseline cell if it differs.
 learning_rate: 3.0e-4
 warmup_ratio: 0.05
 num_train_epochs: 3.0
+lr_scheduler_type: cosine                       # original
+optim: adamw_torch                              # original
 per_device_train_batch_size: 16
-gradient_accumulation_steps: 8                  # global batch 128 = 16 x 8 (single GPU); 128/(16*N) for N GPUs
+per_device_eval_batch_size: 16                  # original (defaults to train bs; only used when validation_file is set)
+# Global batch size 128 is the invariant. Single GPU: 16 x 8 = 128. For N GPUs set
+# gradient_accumulation_steps = 128 / (per_device_train_batch_size * N).
+gradient_accumulation_steps: 8
 max_seq_length: 1024
 weight_decay: 0.01
 max_grad_norm: 0.1
-gradient_checkpointing: true
+bf16_full_eval: true                            # run eval in bf16 as well (original)
+average_tokens_across_devices: true             # token-weighted loss averaging in distributed (original; no-op single-GPU)
+gradient_checkpointing: true                    # required to fit 8B + packing in memory (canonical run uses it)
+gradient_checkpointing_use_reentrant: null      # null = library default (matches original); set false only on a GC autograd error
 logging_steps: 1
-save_strategy: steps
-save_steps: 100
+save_strategy: best                             # best (original): keep the lowest eval-loss ckpt — needs validation_file, else auto-falls back to steps | steps
+metric_for_best_model: loss                     # checkpoint-selection metric when save_strategy=best (original)
+save_steps: 100                                 # checkpoint cadence when save_strategy=steps
+save_total_limit: 1                             # keep only the N best/most-recent checkpoints (original uses 1)
+save_only_model: true                           # checkpoint the adapter only — no optimizer/scheduler/rng/global_step (original; small ckpts, no resume)
+eval_steps: 100                                 # eval cadence (drives best-checkpoint selection; needs validation_file)
+preprocessing_num_workers: 8                    # parallel tokenization workers (matches the original)
 seed: 42
+
+# --- Experiment tracking (off by default so a fresh clone / CI never blocks on a W&B login) ---
+report_to: none                                 # none | wandb. Set to wandb to enable Weights & Biases.
+run_name: null                                  # tracker run name; null = basename of output_dir
+wandb_project: null                             # W&B project (or set the WANDB_PROJECT env var); only used when report_to=wandb
+wandb_entity: null                              # W&B entity/team (or set the WANDB_ENTITY env var); only used when report_to=wandb
+
+# --- Smoke-run knobs (defaults = full run; override for a quick pipeline check) ---
+max_steps: -1                                   # -1 = run the full num_train_epochs; e.g. 20 for a smoke run
+max_train_samples: null                         # null = full corpus; e.g. 4000 to subsample for a smoke run
