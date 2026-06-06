@@ -193,33 +193,52 @@ def main() -> None:
     else:
         collator = default_data_collator
 
+    # save_strategy="best" (the research-repo default) keeps only the lowest-eval-loss checkpoint, but it
+    # needs eval. Degrade to "steps" (with a warning) when no validation set is provided so a fresh run
+    # never crashes — provide validation_file to reproduce the original exactly.
+    save_strategy = cfg.get("save_strategy", "steps")
+    if save_strategy == "best" and eval_dataset is None:
+        logger.warning("save_strategy='best' needs a validation_file; falling back to 'steps'.")
+        save_strategy = "steps"
+
+    # Gradient-checkpointing reentrancy: null (default) leaves it to the library — matches the original
+    # run (resolved gradient_checkpointing_kwargs=None). Set false only if you hit a GC autograd error.
+    gc_reentrant = cfg.get("gradient_checkpointing_use_reentrant")
+    gc_kwargs = None if gc_reentrant is None else {"use_reentrant": bool(gc_reentrant)}
+
     training_args = TrainingArguments(
         output_dir=cfg["output_dir"],
         overwrite_output_dir=True,
         num_train_epochs=float(cfg.get("num_train_epochs", 3.0)),
         max_steps=int(cfg.get("max_steps", -1)),  # -1 = honor num_train_epochs; >0 caps steps (smoke run)
         per_device_train_batch_size=int(cfg.get("per_device_train_batch_size", 16)),
+        per_device_eval_batch_size=int(cfg.get("per_device_eval_batch_size", cfg.get("per_device_train_batch_size", 16))),
         gradient_accumulation_steps=int(cfg.get("gradient_accumulation_steps", 8)),
-        learning_rate=float(cfg.get("learning_rate", 1e-4)),
-        lr_scheduler_type="cosine",
-        warmup_ratio=float(cfg.get("warmup_ratio", 0.03)),
+        learning_rate=float(cfg.get("learning_rate", 3e-4)),
+        lr_scheduler_type=cfg.get("lr_scheduler_type", "cosine"),
+        warmup_ratio=float(cfg.get("warmup_ratio", 0.05)),
         weight_decay=float(cfg.get("weight_decay", 0.01)),
         max_grad_norm=float(cfg.get("max_grad_norm", 0.1)),
-        optim="adamw_torch",
+        optim=cfg.get("optim", "adamw_torch"),
         bf16=True,
+        bf16_full_eval=bool(cfg.get("bf16_full_eval", True)),  # eval in bf16 too (original)
+        average_tokens_across_devices=bool(cfg.get("average_tokens_across_devices", True)),  # token-weighted loss in distributed (original)
         gradient_checkpointing=gradient_checkpointing,
-        gradient_checkpointing_kwargs={"use_reentrant": False} if gradient_checkpointing else None,
+        gradient_checkpointing_kwargs=gc_kwargs if gradient_checkpointing else None,
         logging_steps=int(cfg.get("logging_steps", 1)),
-        save_strategy=cfg.get("save_strategy", "steps"),
+        save_strategy=save_strategy,
         save_steps=int(cfg.get("save_steps", 100)),
         save_total_limit=int(cfg.get("save_total_limit", 1)),
+        metric_for_best_model=cfg.get("metric_for_best_model", "loss"),  # used when save_strategy=best
         # Only the model/adapter is checkpointed — no optimizer / scheduler / RNG / global_step
         # (matches the research repo; keeps 8B + DeepSpeed checkpoints small. Trade-off: can't resume.)
         save_only_model=bool(cfg.get("save_only_model", True)),
         eval_strategy="steps" if eval_dataset is not None else "no",
         eval_steps=int(cfg.get("eval_steps", 100)),
         seed=seed,
-        remove_unused_columns=False,  # the collator consumes the tokenized fields directly
+        # The original used remove_unused_columns=True under SFTTrainer; here the custom PackingCollator
+        # consumes the tokenized fields directly, so column pruning must stay off (does not affect numerics).
+        remove_unused_columns=False,
         report_to=_configure_tracking(cfg),  # "none" (default) | "wandb" — see train.yaml
         run_name=cfg.get("run_name") or os.path.basename(cfg["output_dir"].rstrip("/")),
     )
