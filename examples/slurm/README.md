@@ -80,23 +80,57 @@ sbatch --gpus-per-node=4 examples/slurm/train.slurm
 
 ## 3. Submit inference
 
+**One job evaluates all the benchmarks listed in the config against one adapter** (like the research repo's
+`task_types` list), loads the model **once**, and prints a score summary to its `.out` log. The default config
+[`examples/config/inference.yaml`](../config/inference.yaml) is a **suite** that runs BBC QA + GSM8K + MBPP +
+TiEBe — you set the adapter **once** there:
+
 ```bash
 cd "$GADRA_REPO"
 
-# 1. Edit the run-config: task / adapter / eval_file (and documents_file for bbcqa).
-$EDITOR examples/config/inference.yaml
+# One-time edits:
+#   1) examples/config/inference.yaml   -> set `adapter:` to your save dir (e.g. save/BBC_news/<DATE>/CPT/GaDRA)
+#      (and add/remove task lines in `tasks:` to choose which benchmarks run this job)
+#   2) examples/config/inference_<task>.yaml -> set each `eval_file:` (+ `documents_file:` for bbcqa) to your data
 
-# 2. Keys, only for the tasks that need them (sbatch forwards them to the job):
-export OPENAI_API_KEY=sk-...        # bbcqa / tiebe (GPT judge) — never commit it
-export HF_ALLOW_CODE_EVAL=1         # mbpp (executes model code in a sandbox; already set by the script)
-
-# 3. Submit.
-sbatch examples/slurm/inference.slurm
+export OPENAI_API_KEY=sk-...        # needed because the suite includes the GPT-judged bbcqa + tiebe; never commit it
+sbatch examples/slurm/inference.slurm                 # runs the whole suite (4 tasks) in one job
 ```
 
-Tasks: `qa` / `gsm8k` / `mbpp` are deterministic (no key); `bbcqa` / `tiebe` use the GPT judge. The wrapper runs
-`--config examples/config/inference.yaml`; change the task by editing that file (or add `--override task=...`
-to the script's `examples.inference` line).
+A failing task (e.g. a missing key or file) is reported in the summary and **does not abort the others**; the
+job exits non-zero if any task failed. `HF_ALLOW_CODE_EVAL=1` (MBPP) is already exported by the script.
+
+**Run a single benchmark** instead — point `CONFIG` at one per-task config and `ADAPTER` at your save dir
+(per-task configs carry no model path, so `ADAPTER` supplies it — no file edit):
+
+```bash
+ADAPTER=save/BBC_news/<DATE>/CPT/GaDRA CONFIG=examples/config/inference_gsm8k.yaml sbatch examples/slurm/inference.slurm   # GSM8K (no key)
+ADAPTER=save/BBC_news/<DATE>/CPT/GaDRA CONFIG=examples/config/inference_bbcqa.yaml sbatch examples/slurm/inference.slurm   # BBC QA (needs key)
+```
+
+`ADAPTER` (when set) also overrides the suite's adapter for all tasks. Or run fewer tasks by trimming the
+`tasks:` list in `inference.yaml` — the adapter still lives in exactly one place there.
+
+### Per-task settings (matches the research repo's `configs/eval_config/*.json`)
+
+The suite stamps the shared `adapter` onto every task; each per-task config supplies its own eval file and the
+correct knobs. This table is the mapping (and the three footguns to avoid if you hand-edit a config):
+
+| Paper benchmark | `task` | original eval file | `use_raw_text` | `chat_template_path` | `max_new_tokens` | key |
+|---|---|---|---|---|---|---|
+| **BBC QA** (target) | `bbcqa` ⚠ | `…/v2_5587-test400.jsonl` (+ `handwritten_5587.jsonl` as `documents_file`) | false | llama jinja | 256 | yes |
+| GSM8K (retention) | `gsm8k` | `datasets/GSM8K/gsm8k_llama_test.jsonl` | **true** (8-shot) ⚠ | **null** | 256 | no |
+| MBPP (retention) | `mbpp` | `datasets/MBPP/mbpp_llama_test.jsonl` | **true** (3-shot) ⚠ | **null** | 256 | no |
+| TiEBe (retention) | `tiebe` | `datasets/TiEBe/pre_2023/world.jsonl` | false | llama jinja | **128** ⚠ | yes |
+
+Footguns: (1) **BBC QA is GPT-judged** — use `task=bbcqa`, not `task=qa` (that's char-F1/EM, a different
+metric). (2) **GSM8K/MBPP are few-shot via the raw `text` field** — they need `use_raw_text=true` (else they
+silently degrade to 0-shot chat). (3) **TiEBe uses `max_new_tokens=128`**, not 256.
+
+Generation matches the original bit-for-bit (greedy, `eos=[eos, <|eot_id|>]`, left-padding), so deterministic
+tasks (GSM8K/MBPP and char-F1 QA) are reproducible exactly. `batch_size` is perf-only (greedy is
+batch-invariant). Not covered by these wrappers: CCQA (zh target), commonsense_multi, and the Qwen3/OLMoE
+backbone variants — open an issue if you need them.
 
 ## Monitor & outputs
 
@@ -112,7 +146,16 @@ tail -f slurm-logs/<jobid>.err               # errors
   the model structure, packed-example counts + sample rows, the Trainer's `***** Running training *****`
   summary (num examples, per-device / global batch size, grad-accum, optimization steps, trainable params),
   and the per-step losses. The `slurm-logs/<jobid>.{out,err}` files hold the same stream (plus launcher noise).
-- **Inference** prints metrics to the `.out` log (QA F1/EM, GSM8K EM, MBPP pass@1, or BBC-QA/TiEBe Correct%).
+- **Inference** prints each task's metric as it finishes, then a final summary block to the `.out` log:
+  ```
+  ===== GaDRA inference summary (adapter=save/BBC_news/<DATE>/CPT/GaDRA) =====
+    BBC QA   Correct=83.50% over 400 samples (GPT judge: gpt-4.1-mini)
+    GSM8K    EM=74.30 over 1319 samples
+    MBPP     pass@1=52.40 over 500 samples
+    TiEBe    Correct=41.20% over ... samples (GPT judge: gpt-4.1-mini)
+  ```
+  (Numbers above are illustrative.) A task that fails shows `FAILED: <reason>` in the summary and the job
+  exits non-zero, but the other tasks still run.
 
 ## Data
 
