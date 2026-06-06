@@ -10,13 +10,17 @@
 #        export UV_CACHE_DIR="$GADRA_REPO/.uv-cache"
 #        export UV_PYTHON_INSTALL_DIR="$GADRA_REPO/.uv-python"
 #        cd "$GADRA_REPO" && uv sync --group gpu --locked
-#   2) Edit examples/config/inference.yaml (task / adapter / eval_file), then submit this script.
+#   2) In examples/config/inference.yaml set `adapter` ONCE (the suite runs all tasks in its `tasks:` list);
+#      in each examples/config/inference_<task>.yaml set `eval_file` (+ documents_file for bbcqa) to your data.
 #
-# Submit:
-#   sbatch examples/slurm/inference.slurm                              # deterministic task (qa / gsm8k / mbpp)
-#   export OPENAI_API_KEY=sk-...                                       # bbcqa / tiebe need a key (from the env)
-#   sbatch examples/slurm/inference.slurm                             #   (sbatch propagates the submitting env)
-# On an account/partition cluster (e.g. nano5), set these once — Slurm reads them, no file edit:
+# Submit — DEFAULT runs the whole suite (BBC QA + GSM8K + MBPP + TiEBe) in one job, model loaded once:
+#   export OPENAI_API_KEY=sk-...                                # suite includes GPT-judged bbcqa + tiebe
+#   sbatch examples/slurm/inference.slurm
+# Single benchmark instead — CONFIG selects a per-task config; ADAPTER points it at your save dir (no edits):
+#   ADAPTER=save/BBC_news/<DATE>/CPT/GaDRA CONFIG=examples/config/inference_gsm8k.yaml sbatch examples/slurm/inference.slurm  # GSM8K (no key)
+#   ADAPTER=save/BBC_news/<DATE>/CPT/GaDRA CONFIG=examples/config/inference_bbcqa.yaml sbatch examples/slurm/inference.slurm  # BBC QA (needs key)
+# Per-task knobs (use_raw_text / max_new_tokens / GPT judge) live in the per-task configs; see
+# examples/slurm/README.md -> "Per-task settings". On an account/partition cluster (e.g. nano5), also set once:
 #   export SBATCH_ACCOUNT=<account> SBATCH_PARTITION=<partition>
 
 #SBATCH --job-name=gadra-eval
@@ -54,7 +58,12 @@ unset CONDA_PREFIX CONDA_DEFAULT_ENV 2>/dev/null || true
 cd "$REPO"
 mkdir -p slurm-logs
 
-# Config-driven eval — edit examples/config/inference.yaml (task / adapter / eval_file / documents_file),
-# or override on the CLI, e.g.:  ... -m examples.inference --config examples/config/inference.yaml --override task=bbcqa
+# Config-driven eval — CONFIG picks the run-config (default = the inference.yaml suite, which has `adapter`
+# set once). For a single per-task config (no `tasks:` list, no `adapter:`), point the adapter via ADAPTER=...
+# without editing any file. ADAPTER also overrides the suite's adapter when set.
+CONFIG="${CONFIG:-examples/config/inference.yaml}"
+OVERRIDES=()
+[ -n "${ADAPTER:-}" ] && OVERRIDES+=(--override "adapter=${ADAPTER}")
+echo "config: ${CONFIG}${ADAPTER:+  adapter=${ADAPTER}}"
 uv run --no-sync --offline python -m examples.inference \
-    --config examples/config/inference.yaml
+    --config "${CONFIG}" ${OVERRIDES[@]+"${OVERRIDES[@]}"}

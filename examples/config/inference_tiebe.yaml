@@ -1,0 +1,17 @@
+# TiEBe (retention) — English time-sensitive factual QA, GPT-judged "Correct %". Needs OPENAI_API_KEY.
+# Mirrors configs/eval_config/tiebe.json: chat template applied, gpt_language="tiebe", and note
+# max_new_tokens=128 (NOT 256 like the other tasks).
+#   uv run python -m examples.inference --config examples/config/inference_tiebe.yaml
+# base + adapter come from the suite (examples/inference.yaml, set ONCE) or `--override adapter=...`.
+chat_template_path: examples/config/llama3.2-Instruct.jinja
+
+task: tiebe
+eval_file: data/tiebe_test.jsonl                # original: datasets/TiEBe/pre_2023/world.jsonl
+use_raw_text: false                             # prompt built from `messages` via the chat template
+batch_size: 32
+max_new_tokens: 128                             # TiEBe-specific (the original); other tasks use 256
+
+# GPT judge (key from the OPENAI_API_KEY env var, never the repo):
+gpt_model: gpt-4.1-mini
+gpt_repeats: 1
+gpt_vote_rate: 50

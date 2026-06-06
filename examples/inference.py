@@ -6,10 +6,20 @@ with the same parameters, and scores with the same verbatim scorers (``examples.
 same tokenizer + chat template + greedy params produce identical ``input_ids``, the deterministic metrics
 match the original bit-for-bit.
 
-    uv run python -m examples.inference --config examples/config/inference.yaml [--override key=value ...]
+Two modes (mirrors the research repo's ``task_types`` list + per-task ``configs/eval_config/*.json``):
 
-Tasks: ``qa`` → char-F1/EM, ``gsm8k`` → exact-match, ``mbpp`` → pass@1 (all deterministic / bit-exact);
-``bbcqa`` / ``tiebe`` → GPT-judged "Correct %" (verbatim judge, needs ``OPENAI_API_KEY`` in the environment —
+* **Suite** — set ``adapter`` once and run several benchmarks in one job. The config lists ``tasks:`` (paths
+  to per-task configs, or inline dicts); the model is loaded ONCE and reused across tasks, and a score
+  summary is printed at the end::
+
+      uv run python -m examples.inference --config examples/config/inference.yaml
+
+* **Single task** — the config carries ``task:`` / ``eval_file:`` / ... directly (no ``tasks:`` key)::
+
+      uv run python -m examples.inference --config examples/config/inference_gsm8k.yaml
+
+Tasks: ``qa`` -> char-F1/EM, ``gsm8k`` -> exact-match, ``mbpp`` -> pass@1 (all deterministic / bit-exact);
+``bbcqa`` / ``tiebe`` -> GPT-judged "Correct %" (verbatim judge, needs ``OPENAI_API_KEY`` in the environment —
 the key is never stored in the repo; these are judge-dependent, NOT bit-exact).
 
 Eval JSONL — one object per line; the prompt is built like the parent (``prompt`` verbatim > ``text`` when
@@ -25,6 +35,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import pathlib
 import sys
 
@@ -33,6 +44,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import gadra  # noqa: E402, F401  (registers the "gadra" method with peft)
 from examples import load_run_config  # noqa: E402
+
+VALID_TASKS = ("qa", "gsm8k", "mbpp", "bbcqa", "tiebe")
+DEFAULT_BASE = "meta-llama/Llama-3.1-8B-Instruct"
 
 
 def parse_args() -> argparse.Namespace:
@@ -120,21 +134,26 @@ def _load_documents(documents_file: str | None) -> dict:
     return docs
 
 
-def _load_model(base: str, adapter: str, chat_template_path: str | None):
-    """Load base + GaDRA adapter (gate stays attached — non-mergeable); left-pad + chat template for parity."""
+def _load_model(base: str, adapter: str):
+    """Load base + GaDRA adapter ONCE (gate stays attached — non-mergeable). Reused across all tasks; only
+    the tokenizer is rebuilt per task (its chat template differs), which is cheap."""
     import torch
     from peft import PeftModel
     from transformers import AutoModelForCausalLM
 
+    base_model = AutoModelForCausalLM.from_pretrained(base, torch_dtype=torch.bfloat16, device_map="auto")
+    return PeftModel.from_pretrained(base_model, adapter).eval()
+
+
+def _tokenizer_for(base: str, chat_template_path: str | None):
+    """Left-padding tokenizer + the task's chat template (left-pad is required for correct batched decoding)."""
     from examples.processing import get_tokenizer_for_preprocess
 
-    tokenizer = get_tokenizer_for_preprocess(base, chat_template_path=chat_template_path, padding_side="left")
-    base_model = AutoModelForCausalLM.from_pretrained(base, torch_dtype=torch.bfloat16, device_map="auto")
-    model = PeftModel.from_pretrained(base_model, adapter).eval()
-    return model, tokenizer
+    return get_tokenizer_for_preprocess(base, chat_template_path=chat_template_path, padding_side="left")
 
 
-def main() -> None:
+def run_task(model, task_cfg: dict) -> tuple[str, str]:
+    """Run one task against an already-loaded ``model``; print and return ``(label, metric_line)``."""
     from examples.evaluation import (
         GPTJudge,
         compute_gsm8k_metrics,
@@ -144,22 +163,21 @@ def main() -> None:
         generate_greedy,
     )
 
-    args = parse_args()
-    cfg = load_run_config(args.config, args.override)
+    task = task_cfg.get("task", "gsm8k")
+    if task not in VALID_TASKS:
+        raise ValueError(f"Unknown task {task!r}; expected one of {VALID_TASKS}.")
+    if task in ("bbcqa", "tiebe") and not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError(f"task {task!r} is GPT-judged but OPENAI_API_KEY is not set in the environment.")
 
-    task = cfg.get("task", "gsm8k")
-    if task not in ("qa", "gsm8k", "mbpp", "bbcqa", "tiebe"):
-        raise ValueError(f"Unknown task {task!r}; expected 'qa', 'gsm8k', 'mbpp', 'bbcqa', or 'tiebe'.")
+    tokenizer = _tokenizer_for(task_cfg["base"], task_cfg.get("chat_template_path"))
+    use_raw_text = bool(task_cfg.get("use_raw_text", False))
 
-    model, tokenizer = _load_model(cfg["base"], cfg["adapter"], cfg.get("chat_template_path"))
-    use_raw_text = bool(cfg.get("use_raw_text", False))
-
-    with open(cfg["eval_file"], encoding="utf-8") as fh:
+    with open(task_cfg["eval_file"], encoding="utf-8") as fh:
         rows = [json.loads(line) for line in fh if line.strip()]
     prompts = [_build_prompt(r, tokenizer, use_raw_text) for r in rows]
 
-    batch_size = int(cfg.get("batch_size", 16))
-    max_new_tokens = int(cfg.get("max_new_tokens", 256))
+    batch_size = int(task_cfg.get("batch_size", 16))
+    max_new_tokens = int(task_cfg.get("max_new_tokens", 256))
     preds: list[str] = []
     for i in range(0, len(prompts), batch_size):
         preds.extend(generate_greedy(model, tokenizer, prompts[i : i + batch_size], max_new_tokens=max_new_tokens))
@@ -171,11 +189,13 @@ def main() -> None:
             scores.append(compute_qa_metrics_answer_list(p, refs) if len(refs) > 1 else compute_qa_metrics(p, refs[0] if refs else _reference_text(r)))
         f1 = sum(s["f1"] for s in scores) / len(scores)
         em = sum(s["em"] for s in scores) / len(scores)
-        print(f"QA: F1={f1:.2f} EM={em:.2f} over {len(scores)} samples")
+        line = f"F1={f1:.2f} EM={em:.2f} over {len(scores)} samples"
+        label = "QA"
     elif task == "gsm8k":
         results = [compute_gsm8k_metrics(p, _answer_list(r)) for p, r in zip(preds, rows)]
         em = sum(x["em"] for x in results) / len(results)
-        print(f"GSM8K: EM={em:.2f} over {len(results)} samples")
+        line = f"EM={em:.2f} over {len(results)} samples"
+        label = "GSM8K"
     elif task == "mbpp":
         tests = [r["test"] for r in rows]
         # SECURITY: pass@1 EXECUTES the model-generated code against the reference tests
@@ -187,15 +207,16 @@ def main() -> None:
             file=sys.stderr,
         )
         result = compute_pass_at_k(preds, tests, k=[1])
-        print(f"MBPP: pass@1={result['pass@1'] * 100:.2f} over {len(rows)} samples")
+        line = f"pass@1={result['pass@1'] * 100:.2f} over {len(rows)} samples"
+        label = "MBPP"
     else:  # bbcqa | tiebe — GPT-judged "Correct %" (needs OPENAI_API_KEY; NOT bit-exact)
         judge = GPTJudge(
             language="en" if task == "bbcqa" else "tiebe",
-            model=cfg.get("gpt_model", "gpt-4.1-mini"),
-            evaluation_repeats=int(cfg.get("gpt_repeats", 1)),
-            vote_rate=int(cfg.get("gpt_vote_rate", 50)),
+            model=task_cfg.get("gpt_model", "gpt-4.1-mini"),
+            evaluation_repeats=int(task_cfg.get("gpt_repeats", 1)),
+            vote_rate=int(task_cfg.get("gpt_vote_rate", 50)),
         )
-        docs = _load_documents(cfg.get("documents_file")) if task == "bbcqa" else {}
+        docs = _load_documents(task_cfg.get("documents_file")) if task == "bbcqa" else {}
         items = []
         for p, r in zip(preds, rows):
             if task == "bbcqa":
@@ -206,7 +227,75 @@ def main() -> None:
                 document = _reference_text(r)
             items.append({"document": document, "question": _question_text(r), "answer": p})
         correct = judge.correct_percent(items)
-        print(f"{task.upper()}: Correct={correct:.2f}% over {len(rows)} samples (GPT judge: {judge.model})")
+        line = f"Correct={correct:.2f}% over {len(rows)} samples (GPT judge: {judge.model})"
+        label = task.upper()
+
+    print(f"{label}: {line}")
+    return label, line
+
+
+def _resolve_task_configs(cfg: dict) -> tuple[str, str, list[dict]]:
+    """Return ``(base, adapter, [task_cfg, ...])`` for suite (``tasks:`` list) or single-task (``task:``) mode.
+
+    ``adapter`` lives ONLY at the top level (set once); the per-task configs carry no model path (like the
+    research repo's ``configs/eval_config/*.json``). ``base`` defaults to ``DEFAULT_BASE``. In suite mode the
+    shared ``base`` / ``adapter`` are stamped onto every task.
+    """
+    base = cfg.get("base", DEFAULT_BASE)
+    adapter = cfg.get("adapter")
+    tasks = cfg.get("tasks")
+    if isinstance(tasks, list) and tasks:
+        if not adapter:
+            raise ValueError("suite config needs `adapter:` (set it ONCE; it is applied to every task).")
+        resolved = []
+        for entry in tasks:
+            tc = dict(load_run_config(entry)) if isinstance(entry, str) else dict(entry)
+            tc["base"], tc["adapter"] = base, adapter  # set-adapter-once: top-level values win
+            resolved.append(tc)
+        return base, adapter, resolved
+    # single-task: the config itself is the task config
+    if not adapter:
+        raise ValueError(
+            "config needs `adapter:` (the trained GaDRA dir). Set it once in the suite "
+            "(examples/inference.yaml), or pass `--override adapter=save/.../CPT/<EXP_NAME>`."
+        )
+    cfg = {**cfg, "base": base}
+    return base, adapter, [cfg]
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = load_run_config(args.config, args.override)
+
+    base, adapter, task_cfgs = _resolve_task_configs(cfg)
+
+    # Fail fast on a bad task name / missing key BEFORE the expensive model load.
+    for tc in task_cfgs:
+        t = tc.get("task", "gsm8k")
+        if t not in VALID_TASKS:
+            raise ValueError(f"Unknown task {t!r}; expected one of {VALID_TASKS}.")
+
+    print(f"loading model: base={base} adapter={adapter}")
+    print(f"tasks: {[tc.get('task') for tc in task_cfgs]}")
+    model = _load_model(base, adapter)
+
+    results: list[tuple[str, str]] = []
+    failures = 0
+    for tc in task_cfgs:
+        label = tc.get("task", "gsm8k")
+        try:
+            results.append(run_task(model, tc))
+        except Exception as exc:  # one task's failure must not abort the rest of the suite
+            failures += 1
+            results.append((label.upper(), f"FAILED: {exc}"))
+            print(f"[{label}] FAILED: {exc}", file=sys.stderr)
+
+    print(f"\n===== GaDRA inference summary (adapter={adapter}) =====")
+    for label, line in results:
+        print(f"  {label:8s} {line}")
+    if failures:
+        print(f"{failures} task(s) failed", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
