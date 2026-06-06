@@ -48,6 +48,8 @@ export UV_LINK_MODE=copy
 export UV_NO_SYNC=1
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
+# Unbuffered stdout so the Trainer's per-step losses stream into log.txt / the .out log live.
+export PYTHONUNBUFFERED=1
 
 # --- Isolate from conda (the account keeps conda for the parent research repo; do NOT let it bleed in) ---
 unset CONDA_PREFIX CONDA_DEFAULT_ENV 2>/dev/null || true

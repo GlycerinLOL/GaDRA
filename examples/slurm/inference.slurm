@@ -52,6 +52,8 @@ export TRANSFORMERS_OFFLINE=1
 # MBPP runs candidate code in a sandbox; other tasks ignore it. Harmless to leave on.
 export HF_ALLOW_CODE_EVAL=1
 export TOKENIZERS_PARALLELISM=false
+# Unbuffered stdout so generation / judge progress streams to the .out log live (SLURM block-buffers files).
+export PYTHONUNBUFFERED=1
 
 # OPENAI_API_KEY is NEVER stored here. bbcqa / tiebe (GPT judge) read it from the environment;
 # `export OPENAI_API_KEY=...` before sbatch and it propagates (sbatch exports the submitting env by default).

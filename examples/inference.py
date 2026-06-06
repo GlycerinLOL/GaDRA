@@ -37,6 +37,7 @@ import ast
 import json
 import os
 import pathlib
+import socket
 import sys
 
 # Repo-only tooling: support both ``python -m examples.inference`` and the file-path form.
@@ -47,6 +48,18 @@ from examples import load_run_config  # noqa: E402
 
 VALID_TASKS = ("qa", "gsm8k", "mbpp", "bbcqa", "tiebe")
 DEFAULT_BASE = "meta-llama/Llama-3.1-8B-Instruct"
+
+
+def _openai_reachable(timeout: float = 5.0) -> bool:
+    """Quick TCP probe to the OpenAI endpoint, so GPT-judged tasks fail FAST on an offline compute node
+    instead of hanging on per-request retries/timeouts. Skipped when a custom OPENAI_BASE_URL is set."""
+    if os.environ.get("OPENAI_BASE_URL"):
+        return True  # custom endpoint (Azure/proxy) — don't second-guess reachability
+    try:
+        with socket.create_connection(("api.openai.com", 443), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def parse_args() -> argparse.Namespace:
@@ -166,8 +179,17 @@ def run_task(model, task_cfg: dict) -> tuple[str, str]:
     task = task_cfg.get("task", "gsm8k")
     if task not in VALID_TASKS:
         raise ValueError(f"Unknown task {task!r}; expected one of {VALID_TASKS}.")
-    if task in ("bbcqa", "tiebe") and not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError(f"task {task!r} is GPT-judged but OPENAI_API_KEY is not set in the environment.")
+    # GPT-judged tasks need a key AND outbound internet — check BOTH before the (slow) generation, so on an
+    # offline compute node bbcqa/tiebe fail in seconds instead of hanging on per-request retries.
+    if task in ("bbcqa", "tiebe"):
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError(f"task {task!r} is GPT-judged but OPENAI_API_KEY is not set in the environment.")
+        if not _openai_reachable():
+            raise RuntimeError(
+                f"task {task!r} is GPT-judged but api.openai.com is unreachable from this node. SLURM compute "
+                "nodes are usually offline — run bbcqa/tiebe on a node with internet, or drop them from the "
+                "suite's `tasks:` list. The deterministic tasks (gsm8k / mbpp) run fully offline."
+            )
 
     tokenizer = _tokenizer_for(task_cfg["base"], task_cfg.get("chat_template_path"))
     use_raw_text = bool(task_cfg.get("use_raw_text", False))
@@ -178,9 +200,12 @@ def run_task(model, task_cfg: dict) -> tuple[str, str]:
 
     batch_size = int(task_cfg.get("batch_size", 16))
     max_new_tokens = int(task_cfg.get("max_new_tokens", 256))
+    total = len(prompts)
+    print(f"[{task}] generating {total} prompts (batch_size={batch_size}, max_new_tokens={max_new_tokens})", flush=True)
     preds: list[str] = []
-    for i in range(0, len(prompts), batch_size):
+    for i in range(0, total, batch_size):
         preds.extend(generate_greedy(model, tokenizer, prompts[i : i + batch_size], max_new_tokens=max_new_tokens))
+        print(f"[{task}] generated {min(i + batch_size, total)}/{total}", flush=True)
 
     if task == "qa":
         scores = []
@@ -230,7 +255,7 @@ def run_task(model, task_cfg: dict) -> tuple[str, str]:
         line = f"Correct={correct:.2f}% over {len(rows)} samples (GPT judge: {judge.model})"
         label = task.upper()
 
-    print(f"{label}: {line}")
+    print(f"{label}: {line}", flush=True)
     return label, line
 
 
@@ -275,8 +300,8 @@ def main() -> None:
         if t not in VALID_TASKS:
             raise ValueError(f"Unknown task {t!r}; expected one of {VALID_TASKS}.")
 
-    print(f"loading model: base={base} adapter={adapter}")
-    print(f"tasks: {[tc.get('task') for tc in task_cfgs]}")
+    print(f"loading model: base={base} adapter={adapter}", flush=True)
+    print(f"tasks: {[tc.get('task') for tc in task_cfgs]}", flush=True)
     model = _load_model(base, adapter)
 
     results: list[tuple[str, str]] = []
@@ -290,9 +315,9 @@ def main() -> None:
             results.append((label.upper(), f"FAILED: {exc}"))
             print(f"[{label}] FAILED: {exc}", file=sys.stderr)
 
-    print(f"\n===== GaDRA inference summary (adapter={adapter}) =====")
+    print(f"\n===== GaDRA inference summary (adapter={adapter}) =====", flush=True)
     for label, line in results:
-        print(f"  {label:8s} {line}")
+        print(f"  {label:8s} {line}", flush=True)
     if failures:
         print(f"{failures} task(s) failed", file=sys.stderr)
         sys.exit(1)

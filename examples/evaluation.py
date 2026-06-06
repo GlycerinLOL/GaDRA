@@ -383,8 +383,10 @@ class GPTJudge:
         self.user_template = cfg["user_template"]
         self.correct_label = cfg["correct"]
         self.incorrect_label = cfg["incorrect"]
-        # openai SDK's built-in retry (exponential backoff) replaces the parent's tenacity decorator.
-        self._client = openai.OpenAI(api_key=api_key, max_retries=6)
+        # Bounded retries + a per-request timeout so a degraded/offline network surfaces quickly instead of
+        # hanging on the SDK's default (600s timeout, long backoff). Inference also runs a fast reachability
+        # preflight before this point, so this is a second line of defense.
+        self._client = openai.OpenAI(api_key=api_key, max_retries=2, timeout=60.0)
 
     def evaluate_single(self, document: str, question: str, answer: str) -> str:
         user_message = self.user_template.format(document=document, question=question, answer=answer)
@@ -415,5 +417,11 @@ class GPTJudge:
         """Correct % over items, each a dict with keys ``document`` / ``question`` / ``answer`` (prediction)."""
         if not items:
             return 0.0
-        n_correct = sum(self.evaluate(it["document"], it["question"], it["answer"]) == self.correct_label for it in items)
-        return n_correct / len(items) * 100
+        total = len(items)
+        n_correct = 0
+        for idx, it in enumerate(items, 1):
+            if self.evaluate(it["document"], it["question"], it["answer"]) == self.correct_label:
+                n_correct += 1
+            if idx % 25 == 0 or idx == total:  # flushed progress so the judge phase isn't a silent black box
+                print(f"[judge] {idx}/{total} ({self.model})", flush=True)
+        return n_correct / total * 100
