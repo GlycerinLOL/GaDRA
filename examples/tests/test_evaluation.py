@@ -62,6 +62,11 @@ def test_qa_exact_match_is_100():
     assert out["em"] == 100.0 and out["f1"] == 100.0
 
 
-def test_gsm8k_currency_comma_normalization():
-    out = compute_gsm8k_metrics("The final answer is $1,234", ["1234"])
-    assert out["is_correct"] and out["em"] == 100.0
+def test_gsm8k_raw_membership_no_normalization():
+    # The inference path (inference_common.GSM8KEvaluator) scores by RAW string membership — its
+    # numeric-normalize lines are commented out, so this reproduces the paper's GSM8K EM verbatim.
+    exact = compute_gsm8k_metrics("The final answer is 42", ["42"])
+    assert exact["is_correct"] and exact["em"] == 100.0
+    # Currency/comma forms only match AFTER normalization; the raw scorer deliberately does NOT credit them.
+    strict = compute_gsm8k_metrics("The final answer is $1,234", ["1234"])
+    assert not strict["is_correct"] and strict["em"] == 0.0

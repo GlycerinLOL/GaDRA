@@ -6,6 +6,12 @@ Freezes the parent scorers' outputs on a diverse case set so ``test_evaluation.p
     GADRA_SOURCE_REPO=/path/to/Adapter_Research python GaDRA/examples/tests/capture_eval_golden.py
 
 Writes ``examples/tests/_golden/eval_golden.pt`` (committed). Skips cleanly when the source repo is absent.
+
+GSM8K note: the golden mirrors the *inference path* ``inference_common.GSM8KEvaluator`` (RAW membership —
+its numeric-normalize lines are commented out), NOT the offline ``evaluate_gsm8k.compute_gsm8k_metrics``
+(which DOES normalize). The inference path is what produces the paper's GSM8K EM (``distribution_stats.json``
+-> ``build_canonical_results.py``), so ``examples.evaluation.compute_gsm8k_metrics`` reproduces it verbatim.
+``normalize_numeric_answer`` is still imported — it remains a verbatim helper exercised by ``test_normalizers``.
 """
 
 import os
@@ -20,9 +26,21 @@ if not REPO or not pathlib.Path(REPO).is_dir():
 sys.path.insert(0, REPO)
 
 from evaluate_document_qa import compute_metrics  # noqa: E402  parent char-F1/EM
-from evaluate_gsm8k import compute_gsm8k_metrics, normalize_numeric_answer  # noqa: E402
+from evaluate_gsm8k import normalize_numeric_answer  # noqa: E402  helper exercised by test_normalizers
 from inference_common import normalize_answer  # noqa: E402
 from utils import llama_gsm8k_parse, llama_mbpp_parse  # noqa: E402
+
+
+def gsm8k_raw_result(prediction, answers):
+    """Mirror ``inference_common.GSM8KEvaluator.process_batch`` — RAW membership, no normalization.
+
+    Verbatim of the inference-path scorer (its ``normalize_*`` lines are commented out): parse the final
+    answer, then test exact string membership in the gold list. Shape matches
+    ``examples.evaluation.compute_gsm8k_metrics`` (``em`` is the per-sample 0/100 the aggregate sums)."""
+    parsed = llama_gsm8k_parse(prediction or "")
+    gold = [str(a) for a in answers if a]
+    is_correct = bool(parsed) and parsed in gold
+    return {"parsed_prediction": parsed, "answers": gold, "is_correct": is_correct, "em": 100.0 if is_correct else 0.0}
 
 QA = [
     ("Paris", "paris"),
@@ -60,7 +78,7 @@ NORM = ["Hello, World!", "  THE   dog  ", "$1,234.00", "3.50", "-7", "", "abc"]
 
 golden = {
     "qa": [{"pred": p, "ref": r, **compute_metrics(p, r)} for p, r in QA],
-    "gsm": [{"pred": p, "answers": a, "result": compute_gsm8k_metrics(p, a)} for p, a in GSM],
+    "gsm": [{"pred": p, "answers": a, "result": gsm8k_raw_result(p, a)} for p, a in GSM],
     "mbpp_parse": [{"raw": s, "out": llama_mbpp_parse(s)} for s in MBPP_RAW],
     "gsm_parse": [{"raw": s, "out": llama_gsm8k_parse(s)} for s in GSM_RAW],
     "norm": [{"s": s, "answer": normalize_answer(s), "numeric": normalize_numeric_answer(s)} for s in NORM],
