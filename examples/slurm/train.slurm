@@ -25,9 +25,8 @@
 
 #SBATCH --job-name=gadra-cpt
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=2
-#SBATCH --cpus-per-task=16
-#SBATCH --time=24:00:00
+#SBATCH --gpus-per-node=4
+#SBATCH --cpus-per-task=48
 #SBATCH --output=slurm-logs/%j.out
 #SBATCH --error=slurm-logs/%j.err
 
