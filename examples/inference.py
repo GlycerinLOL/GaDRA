@@ -257,6 +257,7 @@ def run_task(model, task_cfg: dict) -> dict:
         compute_qa_metrics,
         compute_qa_metrics_answer_list,
         generate_greedy,
+        llama_mbpp_parse,
     )
 
     task = task_cfg.get("task", "gsm8k")
@@ -313,18 +314,28 @@ def run_task(model, task_cfg: dict) -> dict:
         batch_rows = rows[i : i + batch_size]
         batch_preds = generate_greedy(model, tokenizer, prompts[i : i + batch_size], max_new_tokens=max_new_tokens, cache_implementation=cache_impl)
         preds.extend(batch_preds)
-        print(f"[{task}] generated {min(i + batch_size, total)}/{total}", flush=True)
-        if is_judged:  # dispatch this batch to the judge pool now; it runs while the next batch generates
-            for p, r in zip(batch_preds, batch_rows):
+        generated = min(i + batch_size, total)
+        if is_judged:  # build each per-sample record + dispatch its judge call now (judging overlaps the next batch)
+            for j, (p, r) in enumerate(zip(batch_preds, batch_rows)):
+                gidx = i + j
+                reference = _reference_text(r)  # gold = messages[-1] (the turn dropped from the prompt)
                 if task == "bbcqa":
-                    document = docs.get(_resolve_doc_id(r.get("id"))) or r.get("document", "")
-                    if not document:  # original skips samples whose source article is missing (not judged/counted)
+                    judge_doc = docs.get(_resolve_doc_id(r.get("id"))) or r.get("document", "")
+                    if not judge_doc:  # original skips samples whose source article is missing (not judged/counted)
                         continue
-                else:
-                    document = _reference_text(r)
-                question = _question_text(r)
-                futures[pool.submit(judge.evaluate, document, question, p)] = len(samples)
-                samples.append({"question": question, "prediction": p})
+                else:  # tiebe — the expected answer doubles as the judge "document"
+                    judge_doc = reference
+                sc = compute_qa_metrics(p, reference)  # char-level F1/EM, exactly as DocumentQAEvaluator records
+                futures[pool.submit(judge.evaluate_detailed, judge_doc, _question_text(r), p)] = len(samples)
+                samples.append({"id": r.get("id") or f"sample_{gidx}", "input": prompts[gidx],
+                                "reference": reference, "prediction": p, "f1": sc["f1"], "em": sc["em"]})
+            # Make the gen<->judge overlap visible: how many of the dispatched judge calls have ALREADY finished on
+            # the 32-worker pool *while the GPU kept generating*. A "judged" count that climbs across these lines
+            # (rather than staying 0 until generation ends) is the overlap at work. f.done() is non-blocking.
+            judged_done = sum(1 for f in futures if f.done())
+            print(f"[{task}] generated {generated}/{total} | judged {judged_done}/{len(futures)} done (overlapping)", flush=True)
+        else:
+            print(f"[{task}] generated {generated}/{total}", flush=True)
 
     if task == "qa":
         samples, f1s, ems = [], [], []
@@ -338,15 +349,19 @@ def run_task(model, task_cfg: dict) -> dict:
         line, label = f"F1={f1:.2f} EM={em:.2f} over {total} samples", "QA"
         stats = {"task": task, "f1": f1, "em": em, "num_samples": total}
     elif task == "gsm8k":
-        samples, ems = [], []
-        for p, r in zip(preds, rows):
-            refs = _answer_list(r)
-            x = compute_gsm8k_metrics(p, refs)
-            ems.append(x["em"])
-            samples.append({"prediction": p, "answers": refs, "em": x["em"]})
-        em = sum(ems) / total
-        line, label = f"EM={em:.2f} over {total} samples", "GSM8K"
-        stats = {"task": task, "em": em, "num_samples": total}
+        samples, n_correct = [], 0
+        for gidx, (p, r) in enumerate(zip(preds, rows)):
+            x = compute_gsm8k_metrics(p, _answer_list(r))  # raw membership, verbatim GSM8KEvaluator
+            n_correct += int(x["is_correct"])
+            samples.append({"id": r.get("id") or f"sample_{gidx}", "question": _question_text(r),
+                            "input": prompts[gidx], "prediction": p, "parsed_prediction": x["parsed_prediction"],
+                            "answers": x["answers"], "is_correct": x["is_correct"]})
+        exact_match = (n_correct / total * 100) if total else 0.0
+        line, label = f"EM={exact_match:.2f} over {total} samples", "GSM8K"
+        stats = {
+            "gsm8k_results": {"correct": n_correct, "incorrect": total - n_correct, "total": total, "exact_match": exact_match},
+            "final_scores": {"exact_match": exact_match, "correct": n_correct, "total": total},
+        }
     elif task == "mbpp":
         tests = [r["test"] for r in rows]
         # SECURITY: pass@1 EXECUTES the model-generated code against the reference tests
@@ -357,39 +372,61 @@ def run_task(model, task_cfg: dict) -> dict:
             "run only in an isolated/sandboxed environment.",
             file=sys.stderr, flush=True,
         )
-        result = compute_pass_at_k(
+        metrics, passed = compute_pass_at_k(
             preds,
             tests,
             k=task_cfg.get("code_eval_k", [1]),
             num_workers=int(task_cfg.get("code_eval_num_workers", 8)),  # research-repo default
             timeout=float(task_cfg.get("code_eval_timeout", 30.0)),
+            return_passed=True,
         )
-        pass1 = result["pass@1"] * 100
-        line, label = f"pass@1={pass1:.2f} over {total} samples", "MBPP"
-        stats = {"task": task, "pass@1": pass1, "num_samples": total}
-        samples = [{"prediction": p, "test": t} for p, t in zip(preds, tests)]
+        samples = [
+            {"id": r.get("id") or f"sample_{gidx}", "input": prompts[gidx], "prediction": p,
+             "candidates": [llama_mbpp_parse(p)], "reference": t,
+             "passed": bool(passed[gidx]) if gidx < len(passed) else False}
+            for gidx, (p, r, t) in enumerate(zip(preds, rows, tests))
+        ]
+        n_correct = sum(1 for s in samples if s["passed"])
+        pass1 = float(metrics.get("pass@1", 0.0))
+        line, label = f"pass@1={pass1 * 100:.2f}% over {total} samples", "MBPP"
+        stats = {
+            "code_eval": metrics,  # pass@k as a fraction in [0,1] (verbatim the research repo's code_eval block)
+            "code_eval_stats": {"total": total, "correct": n_correct, "wrong": total - n_correct},
+            "final_scores": metrics,
+        }
     else:  # bbcqa | tiebe — drain the judge futures dispatched during generation (overlapped with the GPU)
         n_correct = done = 0
         total_j = len(futures)
         for fut in as_completed(futures):
             idx = futures[fut]
             try:
-                verdict = fut.result()
-            except Exception:
-                verdict = judge.incorrect_label
-            samples[idx]["verdict"] = verdict
-            if verdict == judge.correct_label:
+                gpt = fut.result()
+            except Exception:  # a failed judge future counts as Incorrect — mirror the parent's per-future fallback
+                reps = max(1, int(getattr(judge, "evaluation_repeats", 1)))
+                gpt = {"final_decision": judge.incorrect_label, "all_results": [judge.incorrect_label] * reps,
+                       "correct_count": 0, "total_count": reps, "correct_rate": 0.0}
+            samples[idx]["gpt_evaluation"] = gpt
+            if gpt["final_decision"] == judge.correct_label:
                 n_correct += 1
             done += 1
-            if done % 25 == 0 or done == total_j:
-                print(f"[judge] {done}/{total_j} ({judge.model}, {gpt_workers} workers)", flush=True)
+            if done % 25 == 0 or done == total_j:  # collecting verdicts dispatched during generation (the tail past gen)
+                print(f"[judge] collected {done}/{total_j} ({judge.model}, {gpt_workers} workers)", flush=True)
         pool.shutdown()
+        n_incorrect = total_j - n_correct
         skipped = total - total_j  # bbcqa samples whose source document was missing (matches the original)
+        f1_mean = sum(s["f1"] for s in samples) / total_j if total_j else 0.0
+        em_mean = sum(s["em"] for s in samples) / total_j if total_j else 0.0
         correct = n_correct / total_j * 100 if total_j else 0.0
         suffix = f" ({skipped} skipped: missing doc)" if skipped else ""
         line = f"Correct={correct:.2f}% over {total_j} samples{suffix} (GPT judge: {judge.model})"
         label = task.upper()
-        stats = {"task": task, "correct_percent": correct, "num_samples": total_j, "num_skipped": skipped, "gpt_model": judge.model, "gpt_workers": gpt_workers}
+        stats = {
+            "gpt_evaluation": {
+                judge.correct_label: {"count": n_correct, "percentage": correct},
+                judge.incorrect_label: {"count": n_incorrect, "percentage": (n_incorrect / total_j * 100) if total_j else 0.0},
+            },
+            "final_scores": {"f1": f1_mean, "em": em_mean},
+        }
 
     print(f"{label}: {line}", flush=True)
     return {"label": label, "line": line, "stats": stats, "samples": samples}

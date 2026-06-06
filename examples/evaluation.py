@@ -24,7 +24,7 @@ import os
 import re
 import string
 from collections import Counter
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 
@@ -259,7 +259,8 @@ def compute_pass_at_k(
     num_workers: int = 4,
     timeout: float = 30.0,
     extract: bool = True,
-) -> Dict[str, float]:
+    return_passed: bool = False,
+) -> Dict[str, float] | Tuple[Dict[str, float], List[bool]]:
     """pass@k with one candidate per problem (the GaDRA paper's MBPP/HumanEval setting).
 
     Code execution is a security-sensitive, already-solved problem — we delegate to the sandboxed
@@ -272,6 +273,9 @@ def compute_pass_at_k(
         predictions: model generation for each problem (code extracted via ``llama_mbpp_parse`` when ``extract``).
         test_cases:  the test program (asserts) appended after the candidate for each problem.
         k:           pass@k values (default ``[1]``).
+        return_passed: also return a per-sample ``passed`` list (ordered by sample), mirroring
+                       ``inference_common.CodeEvaluator._process_code_eval_results`` — needed to write the
+                       research repo's per-sample ``inference_result.json`` (``passed`` field) + ``code_eval_stats``.
     """
     if os.environ.get("HF_ALLOW_CODE_EVAL") != "1":
         raise RuntimeError(
@@ -287,10 +291,23 @@ def compute_pass_at_k(
     code_eval = evaluate.load("code_eval")
     candidates = [[llama_mbpp_parse(p) if extract else p] for p in predictions]
     references = list(test_cases)
-    results, _ = code_eval.compute(
+    results, raw = code_eval.compute(
         predictions=candidates, references=references, k=k, num_workers=num_workers, timeout=timeout
     )
-    return {f"pass@{kk}": results[f"pass@{kk}"] for kk in k}
+    # Cast to plain Python float — code_eval returns numpy floats, which the json.dump in the result writer
+    # (no numpy encoder) cannot serialize; the research repo also stores a plain float (e.g. 0.506).
+    metrics = {f"pass@{kk}": float(results[f"pass@{kk}"]) for kk in k}
+    if not return_passed:
+        return metrics
+    # Per-sample passed, ordered by task_id (= sample index) — verbatim CodeEvaluator._process_code_eval_results:
+    # raw is {ref_idx: [(pred_idx, result_dict), ...]}; a sample passes if ANY candidate passed.
+    by_task: List[Tuple[int, bool]] = []
+    for sample_results in raw.values():
+        passed = any(res.get("passed", False) for _, res in sample_results)
+        task_id = sample_results[0][1].get("task_id", 0) if sample_results else 0
+        by_task.append((task_id, passed))
+    by_task.sort(key=lambda x: x[0])
+    return metrics, [p for _, p in by_task]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -410,8 +427,11 @@ class GPTJudge:
             return self.correct_label
         return self.incorrect_label
 
-    def evaluate(self, document: str, question: str, answer: str) -> str:
-        """Majority-vote verdict over ``evaluation_repeats`` calls (verbatim ``evaluate_multiple_times``)."""
+    def evaluate_detailed(self, document: str, question: str, answer: str) -> Dict[str, Any]:
+        """Full per-sample judge record (verbatim ``GPTEvaluator.evaluate_multiple_times`` -> the
+        ``gpt_evaluation`` dict the research repo saves into ``inference_result.json``): the majority-vote
+        ``final_decision`` plus the raw per-repeat verdicts and vote counts. ``all_results`` mirrors the
+        parent's saved key name (its in-memory key is ``results``)."""
         results: List[str] = []
         for _ in range(self.evaluation_repeats):
             try:
@@ -421,7 +441,18 @@ class GPTJudge:
         correct_count = results.count(self.correct_label)
         total = len(results)
         correct_rate = (correct_count / total) * 100 if total > 0 else 0
-        return self.correct_label if correct_rate >= self.vote_rate else self.incorrect_label
+        final_decision = self.correct_label if correct_rate >= self.vote_rate else self.incorrect_label
+        return {
+            "final_decision": final_decision,
+            "all_results": results,
+            "correct_count": correct_count,
+            "total_count": total,
+            "correct_rate": correct_rate,
+        }
+
+    def evaluate(self, document: str, question: str, answer: str) -> str:
+        """Majority-vote verdict label only — ``evaluate_detailed(...)["final_decision"]``."""
+        return self.evaluate_detailed(document, question, answer)["final_decision"]
 
     def correct_percent(self, items: List[Dict[str, str]]) -> float:
         """Correct % over items, each a dict with keys ``document`` / ``question`` / ``answer`` (prediction)."""
