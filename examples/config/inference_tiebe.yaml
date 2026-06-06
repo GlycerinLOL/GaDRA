@@ -6,7 +6,7 @@
 chat_template_path: examples/config/llama3.2-Instruct.jinja
 
 task: tiebe
-eval_file: data/tiebe_test.jsonl                # original: datasets/TiEBe/pre_2023/world.jsonl
+eval_file: data/TiEBe/pre_2023/world.jsonl                # original: datasets/TiEBe/pre_2023/world.jsonl
 use_raw_text: false                             # prompt built from `messages` via the chat template
 batch_size: 32
 max_new_tokens: 128                             # TiEBe-specific (the original); other tasks use 256

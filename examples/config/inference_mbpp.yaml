@@ -7,7 +7,7 @@
 chat_template_path: null                        # null = no chat template (the 3-shot prompt is raw text)
 
 task: mbpp
-eval_file: data/mbpp_test.jsonl                 # original: datasets/MBPP/mbpp_llama_test.jsonl (3-shot `text` + `test`)
+eval_file: data/MBPP/mbpp_llama_test.jsonl                 # original: datasets/MBPP/mbpp_llama_test.jsonl (3-shot `text` + `test`)
 use_raw_text: true                              # use the pre-formatted 3-shot `text` field verbatim
 batch_size: 32
 max_new_tokens: 256

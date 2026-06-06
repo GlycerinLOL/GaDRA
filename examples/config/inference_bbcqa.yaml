@@ -7,8 +7,8 @@
 chat_template_path: examples/config/llama3.2-Instruct.jinja
 
 task: bbcqa
-eval_file: data/bbcqa_test.jsonl                # original: datasets/BBC_news_alltime/Finetuning/v2-subset_5587/v2_5587-test400.jsonl
-documents_file: data/bbcqa_documents.jsonl      # judge's source articles; original: datasets/BBC_news_alltime/Pretraining/handwritten_5587.jsonl
+eval_file: data/BBC_news_alltime/Finetuning/v2-subset_5587/v2_5587-test400.jsonl                # original: datasets/BBC_news_alltime/Finetuning/v2-subset_5587/v2_5587-test400.jsonl
+documents_file: data/BBC_news_alltime/Pretraining/handwritten_5587.jsonl      # judge's source articles; original: datasets/BBC_news_alltime/Pretraining/handwritten_5587.jsonl
 use_raw_text: false                             # prompt built from `messages` via the chat template
 batch_size: 32
 max_new_tokens: 256
