@@ -164,15 +164,16 @@ def compute_qa_metrics_answer_list(prediction: str, references: List[str]) -> Di
 
 
 def compute_gsm8k_metrics(prediction: str, answers: List[str]) -> Dict[str, Any]:
-    """GSM8K exact-match via the Llama parser + numeric normalization (verbatim ``evaluate_gsm8k``)."""
+    """GSM8K exact-match: parse the final answer (``llama_gsm8k_parse``) then RAW string membership in the
+    gold ``answers`` — verbatim ``inference_common.GSM8KEvaluator`` (which does NOT numeric-normalize: its
+    normalize lines are commented out). Matching it exactly is required to reproduce the paper's EM; numeric
+    normalization (strip commas / trailing dot) would be more lenient and inflate the score."""
     parsed = llama_gsm8k_parse(prediction or "")
-    norm_pred = normalize_numeric_answer(parsed)
-    norm_ans = list(dict.fromkeys([normalize_numeric_answer(str(a)) for a in answers if a]))
-    is_correct = bool(norm_pred) and norm_pred in norm_ans
+    gold = [str(a) for a in answers if a]
+    is_correct = bool(parsed) and parsed in gold
     return {
         "parsed_prediction": parsed,
-        "normalized_prediction": norm_pred,
-        "normalized_answers": norm_ans,
+        "answers": gold,
         "is_correct": is_correct,
         "em": 100.0 if is_correct else 0.0,
     }
@@ -181,11 +182,16 @@ def compute_gsm8k_metrics(prediction: str, answers: List[str]) -> Dict[str, Any]
 # --------------------------------------------------------------------------------------------------
 # Greedy generation + perplexity (verbatim ``inference_common.get_generation_params``; need a model/GPU)
 # --------------------------------------------------------------------------------------------------
-def get_generation_params(tokenizer: Any, max_new_tokens: int) -> Dict[str, Any]:
-    """Deterministic greedy params + robust multi-family EOS-id set (verbatim research repo).
+def get_generation_params(tokenizer: Any, max_new_tokens: int, *, cache_implementation: Optional[str] = None) -> Dict[str, Any]:
+    """Deterministic greedy params + robust multi-family EOS-id set.
 
     The EOS-id list always contains the tokenizer's ``eos_token_id`` plus any of ``{<|eot_id|>, <|im_end|>}``
     that resolve to a real vocab id (Llama-3 has ``<|eot_id|>``; Qwen3 has ``<|im_end|>``), never ``None``.
+
+    KV-cache: greedy decoding is identical regardless of cache implementation, so this is a pure SPEED knob.
+    Default (``None``) uses transformers' dynamic cache, which is fast WITHOUT ``torch.compile``. The research
+    repo passed ``cache_implementation="static"`` (+ ``disable_compile``) — but static-cache-without-compile
+    pre-allocates to the full length and is markedly SLOWER here, so it is opt-in via the eval config.
     """
     eos_ids = [tokenizer.eos_token_id]
     unk_id = getattr(tokenizer, "unk_token_id", None)
@@ -194,16 +200,18 @@ def get_generation_params(tokenizer: Any, max_new_tokens: int) -> Dict[str, Any]
         if isinstance(tid, int) and tid >= 0 and tid != unk_id:
             eos_ids.append(tid)
     eos_ids = sorted(set(eos_ids))
-    return {
+    params: Dict[str, Any] = {
         "max_new_tokens": max_new_tokens,
         "do_sample": False,
         "top_p": None,
         "temperature": None,
-        "cache_implementation": "static",
-        "disable_compile": True,
         "pad_token_id": tokenizer.eos_token_id,
         "eos_token_id": eos_ids,
     }
+    if cache_implementation:  # opt-in verbatim research-repo behavior (slower without compile)
+        params["cache_implementation"] = cache_implementation
+        params["disable_compile"] = True
+    return params
 
 
 @torch.no_grad()
@@ -214,14 +222,16 @@ def generate_greedy(
     *,
     max_new_tokens: int = 256,
     device: Optional[Any] = None,
+    cache_implementation: Optional[str] = None,
 ) -> List[str]:
     """Batched greedy generation; returns the decoded continuation (prompt stripped) per prompt.
 
     Use a left-padding tokenizer (``tokenizer.padding_side = 'left'``) for correct batched decoding.
+    ``cache_implementation`` is a speed knob (see :func:`get_generation_params`); default = dynamic cache.
     """
     device = device or next(model.parameters()).device
     enc = tokenizer(list(prompts), return_tensors="pt", padding=True).to(device)
-    gen = model.generate(**enc, **get_generation_params(tokenizer, max_new_tokens))
+    gen = model.generate(**enc, **get_generation_params(tokenizer, max_new_tokens, cache_implementation=cache_implementation))
     prompt_len = enc["input_ids"].shape[1]
     return [tokenizer.decode(gen[i, prompt_len:], skip_special_tokens=True) for i in range(gen.shape[0])]
 

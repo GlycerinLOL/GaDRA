@@ -155,16 +155,26 @@ tail -f slurm-logs/<jobid>.err               # errors
   the model structure, packed-example counts + sample rows, the Trainer's `***** Running training *****`
   summary (num examples, per-device / global batch size, grad-accum, optimization steps, trainable params),
   and the per-step losses. The `slurm-logs/<jobid>.{out,err}` files hold the same stream (plus launcher noise).
-- **Inference** prints each task's metric as it finishes, then a final summary block to the `.out` log:
+- **Inference** streams per-batch progress (`[gsm8k] generated 320/1319`), then a per-checkpoint summary to
+  the `.out` log, and **saves results to disk** (like the research repo). When `adapter` points at an
+  experiment ROOT, **every `checkpoint-N/` and the final adapter are evaluated in order** (model reloaded per
+  checkpoint); point it at a single `checkpoint-N/` to run just one. Each (checkpoint, task) writes:
   ```
-  ===== GaDRA inference summary (adapter=save/BBC_news/<DATE>/CPT/GaDRA) =====
+  <checkpoint>/inference_results/<task>/distribution_stats.json   # aggregate metric (first place to look)
+  <checkpoint>/inference_results/<task>/inference_result.json     # per-sample predictions / references
+  ```
+  Summary block in the log:
+  ```
+  ===== summary (checkpoint=final, adapter=save/BBC_news/<DATE>/CPT/GaDRA) =====
     BBC QA   Correct=83.50% over 400 samples (GPT judge: gpt-4.1-mini)
     GSM8K    EM=74.30 over 1319 samples
     MBPP     pass@1=52.40 over 500 samples
     TiEBe    Correct=41.20% over ... samples (GPT judge: gpt-4.1-mini)
   ```
-  (Numbers above are illustrative.) A task that fails shows `FAILED: <reason>` in the summary and the job
-  exits non-zero, but the other tasks still run.
+  (Numbers illustrative.) A failed task shows `FAILED: <reason>` and the job exits non-zero, but the rest run.
+  Greedy decoding uses the **dynamic KV cache by default** (fast, and bit-identical to the research repo's
+  static-cache output); set `cache_implementation: static` in a per-task config only to reproduce the repo's
+  verbatim (slower) generation knobs.
 
 ## Data
 

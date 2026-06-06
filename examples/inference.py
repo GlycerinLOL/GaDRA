@@ -9,14 +9,23 @@ match the original bit-for-bit.
 Two modes (mirrors the research repo's ``task_types`` list + per-task ``configs/eval_config/*.json``):
 
 * **Suite** — set ``adapter`` once and run several benchmarks in one job. The config lists ``tasks:`` (paths
-  to per-task configs, or inline dicts); the model is loaded ONCE and reused across tasks, and a score
-  summary is printed at the end::
+  to per-task configs, or inline dicts); a score summary is printed at the end::
 
       uv run python -m examples.inference --config examples/config/inference.yaml
 
 * **Single task** — the config carries ``task:`` / ``eval_file:`` / ... directly (no ``tasks:`` key)::
 
       uv run python -m examples.inference --config examples/config/inference_gsm8k.yaml
+
+Checkpoint iteration (mirrors the research repo's ``get_checkpoints_to_process``): when ``adapter`` points at
+an experiment ROOT, EVERY ``checkpoint-N/`` plus the final/root adapter is evaluated in order (model reloaded
+per checkpoint, all tasks run for each). Point ``adapter`` at a single ``checkpoint-N/`` (or a root with no
+sub-checkpoints) to evaluate just one. Each (checkpoint, task) writes ``distribution_stats.json`` (aggregate
+metrics) + ``inference_result.json`` (per-sample) under ``<checkpoint>/inference_results/<task>/``.
+
+Speed: greedy decoding is cache-implementation-independent, so the default uses the fast dynamic KV cache.
+Set ``cache_implementation: static`` (+ ``attn_implementation``) per task only to reproduce the research
+repo's verbatim generation knobs (static-cache-without-compile is markedly slower).
 
 Tasks: ``qa`` -> char-F1/EM, ``gsm8k`` -> exact-match, ``mbpp`` -> pass@1 (all deterministic / bit-exact);
 ``bbcqa`` / ``tiebe`` -> GPT-judged "Correct %" (verbatim judge, needs ``OPENAI_API_KEY`` in the environment —
@@ -39,6 +48,7 @@ import os
 import pathlib
 import socket
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Repo-only tooling: support both ``python -m examples.inference`` and the file-path form.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -117,18 +127,35 @@ def _resolve_doc_id(sample_id):
     return sample_id
 
 
-def _build_prompt(row: dict, tokenizer, use_raw_text: bool) -> str:
-    """Build the model prompt, matching the research harness (raw text > messages/question chat template)."""
+def _build_prompt(row: dict, tokenizer, use_raw_text: bool, system_prompt: str | None = None) -> str:
+    """Build the model prompt, matching the research harness (``DocumentQAEvaluator.prepare_inputs``).
+
+    For chat rows WITHOUT an explicit ``answer_list``, the trailing message is the gold answer (it is the
+    reference), so it is DROPPED — the prompt is built from ``messages[:-1]`` — otherwise the gold answer
+    would leak into the prompt and the model could just echo it. With an ``answer_list`` (e.g. TriviaQA /
+    NQ-open) the messages are the prompt and are used whole. Order: explicit ``prompt`` > raw ``text`` (when
+    ``use_raw_text``) > ``messages`` > ``question``.
+    """
     if "prompt" in row:
         return row["prompt"]
     if use_raw_text and row.get("text"):
         return row["text"]
-    if "messages" in row:
-        return tokenizer.apply_chat_template(row["messages"], tokenize=False, add_generation_prompt=True)
+    msgs = row.get("messages")
+    if msgs:
+        messages = [dict(m) for m in msgs if isinstance(m, dict)]
+        if not messages and row.get("question"):
+            messages = [{"role": "user", "content": row["question"]}]
+        has_answer_list = isinstance(row.get("answer_list"), list) and len(row["answer_list"]) > 0
+        dialogue = messages if has_answer_list else (messages[:-1] if len(messages) > 1 else messages)
+        if system_prompt:
+            dialogue = [{"role": "system", "content": system_prompt}, *dialogue]
+        return tokenizer.apply_chat_template(dialogue, tokenize=False, add_generation_prompt=True)
     question = _question_text(row)
     if question:
-        msgs = [{"role": "user", "content": question}]
-        return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        msgs2 = [{"role": "user", "content": question}]
+        if system_prompt:
+            msgs2 = [{"role": "system", "content": system_prompt}, *msgs2]
+        return tokenizer.apply_chat_template(msgs2, tokenize=False, add_generation_prompt=True)
     raise KeyError(f"row has no prompt source (need 'prompt' / 'text' / 'messages' / 'question'): {sorted(row)}")
 
 
@@ -147,26 +174,82 @@ def _load_documents(documents_file: str | None) -> dict:
     return docs
 
 
-def _load_model(base: str, adapter: str):
-    """Load base + GaDRA adapter ONCE (gate stays attached — non-mergeable). Reused across all tasks; only
-    the tokenizer is rebuilt per task (its chat template differs), which is cheap."""
+def _load_model(base: str, adapter: str, attn_implementation: str = "sdpa"):
+    """Load base + GaDRA adapter (gate stays attached — non-mergeable). Reused across all tasks for one
+    checkpoint; only the tokenizer is rebuilt per task (its chat template differs), which is cheap.
+
+    ``attn_implementation`` defaults to ``sdpa`` — matching the research repo's inference
+    (GENERATION_CONFIG ``attn_implementation='sdpa'``); ``device_map='auto'`` as in the original.
+    """
     import torch
     from peft import PeftModel
     from transformers import AutoModelForCausalLM
 
-    base_model = AutoModelForCausalLM.from_pretrained(base, torch_dtype=torch.bfloat16, device_map="auto")
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base, torch_dtype=torch.bfloat16, device_map="auto", attn_implementation=attn_implementation
+    )
     return PeftModel.from_pretrained(base_model, adapter).eval()
 
 
+def _discover_checkpoints(adapter_dir: str) -> list[tuple[str, str]]:
+    """Mirror the research repo's ``get_checkpoints_to_process``: evaluate EVERY checkpoint under an
+    experiment root, not just one. Returns ``[(label, path), ...]`` sorted ``checkpoint-N`` ascending then
+    the final (root) adapter last.
+
+    * a ``checkpoint-N`` dir (or any single HF-peft adapter dir)  -> just that one
+    * an experiment root with ``checkpoint-N/`` subdirs           -> each checkpoint + the root final
+    * a non-local id (HF hub) or a dir with no adapter_config     -> treated as a single adapter
+    """
+    import glob
+
+    norm = os.path.normpath(adapter_dir)
+    base = os.path.basename(norm)
+    has_cfg = os.path.exists(os.path.join(norm, "adapter_config.json"))
+    if base.startswith("checkpoint-") and has_cfg:
+        return [(base, norm)]
+
+    ckpts: list[tuple[int, str]] = []
+    for sub in glob.glob(os.path.join(norm, "checkpoint-*")):
+        if os.path.isdir(sub) and os.path.exists(os.path.join(sub, "adapter_config.json")):
+            try:
+                ckpts.append((int(os.path.basename(sub).split("-", 1)[1]), sub))
+            except ValueError:
+                pass
+    ckpts.sort(key=lambda x: x[0])
+    out: list[tuple[str, str]] = [(f"checkpoint-{n}", p) for n, p in ckpts]
+    if has_cfg:
+        out.append(("final", norm))  # root save_pretrained = final adapter (the research repo's "LoRA/")
+    return out or [(base or norm, norm)]  # fall back to a single adapter (e.g. an HF hub id)
+
+
+def _save_task_results(ckpt_path: str, task: str, result: dict) -> None:
+    """Write per-checkpoint, per-task results like the research repo: a ``distribution_stats.json`` (aggregate
+    metrics — the first place to look) and an ``inference_result.json`` (per-sample) under
+    ``<ckpt_path>/inference_results/<task>/``. Skipped if the adapter isn't a writable local dir."""
+    if not os.path.isdir(ckpt_path):
+        return
+    out_dir = os.path.join(ckpt_path, "inference_results", task)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "distribution_stats.json"), "w", encoding="utf-8") as fh:
+        json.dump(result["stats"], fh, ensure_ascii=False, indent=2)
+    with open(os.path.join(out_dir, "inference_result.json"), "w", encoding="utf-8") as fh:
+        json.dump(result["samples"], fh, ensure_ascii=False, indent=2)
+    print(f"[{task}] saved -> {out_dir}/{{distribution_stats,inference_result}}.json", flush=True)
+
+
 def _tokenizer_for(base: str, chat_template_path: str | None):
-    """Left-padding tokenizer + the task's chat template (left-pad is required for correct batched decoding)."""
-    from examples.processing import get_tokenizer_for_preprocess
+    """Inference tokenizer (verbatim ``inference_common.setup_tokenizer``): left-padding + the task's chat
+    template, BOS/EOS left at the model defaults, pad_token defaults to EOS. Crucially does NOT force
+    ``add_eos_token=True`` (that is the TRAINING-preprocess tokenizer; appending EOS to a generation prompt
+    is wrong — benign on the Llama-3 fast tokenizer, which ignores the flag, but breaks other backbones)."""
+    from examples.processing import build_tokenizer
 
-    return get_tokenizer_for_preprocess(base, chat_template_path=chat_template_path, padding_side="left")
+    return build_tokenizer(base, padding_side="left", chat_template_path=chat_template_path)
 
 
-def run_task(model, task_cfg: dict) -> tuple[str, str]:
-    """Run one task against an already-loaded ``model``; print and return ``(label, metric_line)``."""
+def run_task(model, task_cfg: dict) -> dict:
+    """Run one task against an already-loaded ``model``; print live progress and return a result dict
+    ``{label, line, stats, samples}`` (stats -> distribution_stats.json, samples -> inference_result.json)."""
     from examples.evaluation import (
         GPTJudge,
         compute_gsm8k_metrics,
@@ -193,34 +276,77 @@ def run_task(model, task_cfg: dict) -> tuple[str, str]:
 
     tokenizer = _tokenizer_for(task_cfg["base"], task_cfg.get("chat_template_path"))
     use_raw_text = bool(task_cfg.get("use_raw_text", False))
+    system_prompt = task_cfg.get("system_prompt") if task_cfg.get("use_system_prompt") else None
 
     with open(task_cfg["eval_file"], encoding="utf-8") as fh:
         rows = [json.loads(line) for line in fh if line.strip()]
-    prompts = [_build_prompt(r, tokenizer, use_raw_text) for r in rows]
+    prompts = [_build_prompt(r, tokenizer, use_raw_text, system_prompt) for r in rows]
 
     batch_size = int(task_cfg.get("batch_size", 16))
     max_new_tokens = int(task_cfg.get("max_new_tokens", 256))
+    cache_impl = task_cfg.get("cache_implementation")  # None = dynamic cache (fast); "static" = verbatim repo
     total = len(prompts)
+
+    # GPT-judged tasks: judge each batch's predictions in a thread pool the moment the batch is generated,
+    # while the NEXT batch keeps generating on the GPU — so judging (network) overlaps generation (GPU).
+    # This mirrors the research repo's per-batch generate->judge pipeline with its 32-way parallel judging,
+    # replacing the previous one-call-at-a-time loop (which made ~N sequential API calls).
+    is_judged = task in ("bbcqa", "tiebe")
+    judge = pool = None
+    gpt_workers = 0
+    futures: dict = {}
+    samples: list[dict] = []
+    if is_judged:
+        judge = GPTJudge(
+            language="en" if task == "bbcqa" else "tiebe",
+            model=task_cfg.get("gpt_model", "gpt-4.1-mini"),
+            evaluation_repeats=int(task_cfg.get("gpt_repeats", 1)),
+            vote_rate=int(task_cfg.get("gpt_vote_rate", 50)),
+        )
+        docs = _load_documents(task_cfg.get("documents_file")) if task == "bbcqa" else {}
+        gpt_workers = max(1, int(task_cfg.get("gpt_workers", 32)))
+        pool = ThreadPoolExecutor(max_workers=gpt_workers)
+
     print(f"[{task}] generating {total} prompts (batch_size={batch_size}, max_new_tokens={max_new_tokens})", flush=True)
     preds: list[str] = []
     for i in range(0, total, batch_size):
-        preds.extend(generate_greedy(model, tokenizer, prompts[i : i + batch_size], max_new_tokens=max_new_tokens))
+        batch_rows = rows[i : i + batch_size]
+        batch_preds = generate_greedy(model, tokenizer, prompts[i : i + batch_size], max_new_tokens=max_new_tokens, cache_implementation=cache_impl)
+        preds.extend(batch_preds)
         print(f"[{task}] generated {min(i + batch_size, total)}/{total}", flush=True)
+        if is_judged:  # dispatch this batch to the judge pool now; it runs while the next batch generates
+            for p, r in zip(batch_preds, batch_rows):
+                if task == "bbcqa":
+                    document = docs.get(_resolve_doc_id(r.get("id"))) or r.get("document", "")
+                    if not document:  # original skips samples whose source article is missing (not judged/counted)
+                        continue
+                else:
+                    document = _reference_text(r)
+                question = _question_text(r)
+                futures[pool.submit(judge.evaluate, document, question, p)] = len(samples)
+                samples.append({"question": question, "prediction": p})
 
     if task == "qa":
-        scores = []
+        samples, f1s, ems = [], [], []
         for p, r in zip(preds, rows):
             refs = _answer_list(r)
-            scores.append(compute_qa_metrics_answer_list(p, refs) if len(refs) > 1 else compute_qa_metrics(p, refs[0] if refs else _reference_text(r)))
-        f1 = sum(s["f1"] for s in scores) / len(scores)
-        em = sum(s["em"] for s in scores) / len(scores)
-        line = f"F1={f1:.2f} EM={em:.2f} over {len(scores)} samples"
-        label = "QA"
+            sc = compute_qa_metrics_answer_list(p, refs) if len(refs) > 1 else compute_qa_metrics(p, refs[0] if refs else _reference_text(r))
+            f1s.append(sc["f1"])
+            ems.append(sc["em"])
+            samples.append({"prediction": p, "reference": refs or _reference_text(r), "f1": sc["f1"], "em": sc["em"]})
+        f1, em = sum(f1s) / total, sum(ems) / total
+        line, label = f"F1={f1:.2f} EM={em:.2f} over {total} samples", "QA"
+        stats = {"task": task, "f1": f1, "em": em, "num_samples": total}
     elif task == "gsm8k":
-        results = [compute_gsm8k_metrics(p, _answer_list(r)) for p, r in zip(preds, rows)]
-        em = sum(x["em"] for x in results) / len(results)
-        line = f"EM={em:.2f} over {len(results)} samples"
-        label = "GSM8K"
+        samples, ems = [], []
+        for p, r in zip(preds, rows):
+            refs = _answer_list(r)
+            x = compute_gsm8k_metrics(p, refs)
+            ems.append(x["em"])
+            samples.append({"prediction": p, "answers": refs, "em": x["em"]})
+        em = sum(ems) / total
+        line, label = f"EM={em:.2f} over {total} samples", "GSM8K"
+        stats = {"task": task, "em": em, "num_samples": total}
     elif task == "mbpp":
         tests = [r["test"] for r in rows]
         # SECURITY: pass@1 EXECUTES the model-generated code against the reference tests
@@ -229,34 +355,44 @@ def run_task(model, task_cfg: dict) -> tuple[str, str]:
         print(
             "WARNING: MBPP eval executes model-generated code (HF_ALLOW_CODE_EVAL=1); "
             "run only in an isolated/sandboxed environment.",
-            file=sys.stderr,
+            file=sys.stderr, flush=True,
         )
-        result = compute_pass_at_k(preds, tests, k=[1])
-        line = f"pass@1={result['pass@1'] * 100:.2f} over {len(rows)} samples"
-        label = "MBPP"
-    else:  # bbcqa | tiebe — GPT-judged "Correct %" (needs OPENAI_API_KEY; NOT bit-exact)
-        judge = GPTJudge(
-            language="en" if task == "bbcqa" else "tiebe",
-            model=task_cfg.get("gpt_model", "gpt-4.1-mini"),
-            evaluation_repeats=int(task_cfg.get("gpt_repeats", 1)),
-            vote_rate=int(task_cfg.get("gpt_vote_rate", 50)),
+        result = compute_pass_at_k(
+            preds,
+            tests,
+            k=task_cfg.get("code_eval_k", [1]),
+            num_workers=int(task_cfg.get("code_eval_num_workers", 8)),  # research-repo default
+            timeout=float(task_cfg.get("code_eval_timeout", 30.0)),
         )
-        docs = _load_documents(task_cfg.get("documents_file")) if task == "bbcqa" else {}
-        items = []
-        for p, r in zip(preds, rows):
-            if task == "bbcqa":
-                # judge document = the original source article (by id, suffix-stripped), or an explicit field.
-                document = docs.get(_resolve_doc_id(r.get("id"))) or r.get("document", "")
-            else:
-                # tiebe judges against the expected (gold) answer.
-                document = _reference_text(r)
-            items.append({"document": document, "question": _question_text(r), "answer": p})
-        correct = judge.correct_percent(items)
-        line = f"Correct={correct:.2f}% over {len(rows)} samples (GPT judge: {judge.model})"
+        pass1 = result["pass@1"] * 100
+        line, label = f"pass@1={pass1:.2f} over {total} samples", "MBPP"
+        stats = {"task": task, "pass@1": pass1, "num_samples": total}
+        samples = [{"prediction": p, "test": t} for p, t in zip(preds, tests)]
+    else:  # bbcqa | tiebe — drain the judge futures dispatched during generation (overlapped with the GPU)
+        n_correct = done = 0
+        total_j = len(futures)
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                verdict = fut.result()
+            except Exception:
+                verdict = judge.incorrect_label
+            samples[idx]["verdict"] = verdict
+            if verdict == judge.correct_label:
+                n_correct += 1
+            done += 1
+            if done % 25 == 0 or done == total_j:
+                print(f"[judge] {done}/{total_j} ({judge.model}, {gpt_workers} workers)", flush=True)
+        pool.shutdown()
+        skipped = total - total_j  # bbcqa samples whose source document was missing (matches the original)
+        correct = n_correct / total_j * 100 if total_j else 0.0
+        suffix = f" ({skipped} skipped: missing doc)" if skipped else ""
+        line = f"Correct={correct:.2f}% over {total_j} samples{suffix} (GPT judge: {judge.model})"
         label = task.upper()
+        stats = {"task": task, "correct_percent": correct, "num_samples": total_j, "num_skipped": skipped, "gpt_model": judge.model, "gpt_workers": gpt_workers}
 
     print(f"{label}: {line}", flush=True)
-    return label, line
+    return {"label": label, "line": line, "stats": stats, "samples": samples}
 
 
 def _resolve_task_configs(cfg: dict) -> tuple[str, str, list[dict]]:
@@ -293,33 +429,54 @@ def main() -> None:
     cfg = load_run_config(args.config, args.override)
 
     base, adapter, task_cfgs = _resolve_task_configs(cfg)
+    attn = cfg.get("attn_implementation", "sdpa")
 
-    # Fail fast on a bad task name / missing key BEFORE the expensive model load.
+    # Fail fast on a bad task name BEFORE the expensive model load.
     for tc in task_cfgs:
         t = tc.get("task", "gsm8k")
         if t not in VALID_TASKS:
             raise ValueError(f"Unknown task {t!r}; expected one of {VALID_TASKS}.")
 
-    print(f"loading model: base={base} adapter={adapter}", flush=True)
+    # Mirror the research repo: evaluate EVERY checkpoint under the experiment root, in order
+    # (checkpoint-N ascending, then the final/root adapter), reloading the model per checkpoint.
+    checkpoints = _discover_checkpoints(adapter)
+    print(f"base={base}", flush=True)
     print(f"tasks: {[tc.get('task') for tc in task_cfgs]}", flush=True)
-    model = _load_model(base, adapter)
+    print(f"checkpoints to process ({len(checkpoints)}): {[c[0] for c in checkpoints]}", flush=True)
 
-    results: list[tuple[str, str]] = []
     failures = 0
-    for tc in task_cfgs:
-        label = tc.get("task", "gsm8k")
-        try:
-            results.append(run_task(model, tc))
-        except Exception as exc:  # one task's failure must not abort the rest of the suite
-            failures += 1
-            results.append((label.upper(), f"FAILED: {exc}"))
-            print(f"[{label}] FAILED: {exc}", file=sys.stderr)
+    for ckpt_label, ckpt_path in checkpoints:
+        print(f"\n########## checkpoint {ckpt_label}: {ckpt_path} ##########", flush=True)
+        model = _load_model(base, ckpt_path, attn)
+        summary: list[tuple[str, str]] = []
+        for tc in task_cfgs:
+            t = tc.get("task", "gsm8k")
+            try:
+                res = run_task(model, tc)
+                summary.append((res["label"], res["line"]))
+                _save_task_results(ckpt_path, t, res)
+            except Exception as exc:  # one task's failure must not abort the rest of this checkpoint
+                failures += 1
+                summary.append((t.upper(), f"FAILED: {exc}"))
+                print(f"[{t}] FAILED: {exc}", file=sys.stderr, flush=True)
 
-    print(f"\n===== GaDRA inference summary (adapter={adapter}) =====", flush=True)
-    for label, line in results:
-        print(f"  {label:8s} {line}", flush=True)
+        print(f"\n===== summary (checkpoint={ckpt_label}, adapter={ckpt_path}) =====", flush=True)
+        for label, line in summary:
+            print(f"  {label:8s} {line}", flush=True)
+
+        del model  # free the GPU before the next checkpoint's base+adapter load
+        try:
+            import gc
+
+            import torch
+
+            gc.collect()
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     if failures:
-        print(f"{failures} task(s) failed", file=sys.stderr)
+        print(f"{failures} task(s) failed across all checkpoints", file=sys.stderr)
         sys.exit(1)
 
 

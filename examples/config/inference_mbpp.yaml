@@ -11,3 +11,8 @@ eval_file: data/MBPP/mbpp_llama_test.jsonl                 # original: datasets/
 use_raw_text: true                              # use the pre-formatted 3-shot `text` field verbatim
 batch_size: 32
 max_new_tokens: 256
+
+# code_eval (pass@1) knobs — match the research repo's configs/eval_config/mbpp_llama.json
+code_eval_k: [1]
+code_eval_num_workers: 8
+code_eval_timeout: 30.0

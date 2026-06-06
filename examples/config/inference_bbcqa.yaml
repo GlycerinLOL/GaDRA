@@ -17,3 +17,4 @@ max_new_tokens: 256
 gpt_model: gpt-4.1-mini
 gpt_repeats: 1
 gpt_vote_rate: 50
+gpt_workers: 32                                 # parallel judge calls (research-repo default); overlaps generation
