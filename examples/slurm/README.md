@@ -76,14 +76,18 @@ sbatch --gpus-per-node=4 examples/slurm/train.slurm
   `GPUs=4  per_device_bs=16  grad_accum=2  ->  global_batch=128 (target 128)`.
 - **The recipe** (LR, warmup, epochs, r=512, dual/hard, …) lives in
   [`examples/config/train.yaml`](../config/train.yaml). Edit it, or override at the bottom of the script.
-- **Variants**: add `--override router_conditioning=mono` (GaDRA-Mono) or `--override gate=soft` to the
-  `examples.train` line in the script.
+- **Method / variants**: set the `METHOD` env var — `METHOD=gadra-mono` (GaDRA-Mono), `METHOD=gadra-soft`
+  (GaDRA-Soft), or `METHOD=lora` (the LoRA baseline) — e.g. `METHOD=gadra-mono sbatch examples/slurm/train.slurm`.
+  It overrides the config's `method:` field, so one wrapper trains any shipped method (no file edit). `METHOD`
+  is just the adapter; `EXP_NAME` is the output-dir label — set both to keep results tidy. Use a different
+  `CONFIG=...` to point at another run-config entirely.
 - **Weights & Biases** (off by default): set `report_to: wandb` in [`train.yaml`](../config/train.yaml) and
   either fill `wandb_project` / `wandb_entity` there or export `WANDB_PROJECT` / `WANDB_ENTITY` before
   `sbatch` (they forward to the job). Run `uv run wandb login` once on the login node first.
 - **Output dir** mirrors the research repo's layout — `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/`, built by the
-  script (knobs `DATASET=BBC_news`, `EXP_NAME=GaDRA`, `DATE=$(date +%Y%m%d)`; e.g. `export EXP_NAME=GaDRA-Mono`
-  before `sbatch`). A re-run with the same dataset+date+exp_name **overwrites** it (clean slate, like the original).
+  script (knobs `DATASET=BBC_news`, `EXP_NAME=GaDRA`, `DATE=$(date +%Y%m%d)`; e.g.
+  `EXP_NAME=GaDRA-Mono METHOD=gadra-mono sbatch …`). A re-run with the same dataset+date+exp_name
+  **overwrites** it (clean slate, like the original).
 - **GPU by default** — the script requests `--gpus-per-node=2` and trains on GPU (DeepSpeed `use_cpu: false`,
   one process per GPU); no extra step needed. Change the count with `sbatch --gpus-per-node=N`.
 

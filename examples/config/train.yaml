@@ -9,13 +9,19 @@ output_dir: out/gadra-bbc
 chat_template_path: examples/config/llama3.2-Instruct.jinja   # optional; unused for plain PT text
 packing: fa2_collator                         # fa2_collator (paper-faithful, needs FA2) | group (portable, SDPA)
 
+# --- Method (selects the adapter family + its variant defaults; dispatched by examples/methods.py) ---
+method: gadra                                 # gadra | gadra-mono | gadra-soft | lora  (default: gadra)
+
 # --- GaDRA adapter (paper defaults) ---
 r: 512
 lora_alpha: 1.0
 lora_dropout: 0.05
 target_modules: [up_proj, gate_proj, down_proj]
-router_conditioning: dual                     # dual (GaDRA) | mono (GaDRA-Mono)
-gate: hard                                    # hard (Gumbel-STE) | soft
+# router_conditioning / gate come from the `method` preset (gadra = dual + hard). To run a variant,
+# switch `method:` (e.g. gadra-mono / gadra-soft). Uncomment below ONLY to override the preset — an
+# explicit value here wins over the preset.
+# router_conditioning: dual                   # dual (GaDRA) | mono (GaDRA-Mono)
+# gate: hard                                  # hard (Gumbel-STE) | soft
 
 # --- Training recipe (matches the canonical BBC GaDRA run: train_gadra_cpt.py + configs/datasets/BBC_news_pt.yaml) ---
 # LR/warmup are the BBC cell of the paper's Table 8 — other datasets/methods use different cells.

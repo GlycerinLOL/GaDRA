@@ -185,8 +185,9 @@ uv run accelerate launch --num_processes <N_GPUS> \
     --config_file examples/config/deepspeed_zero2.yaml \
     -m examples.train --config examples/config/train.yaml
 
-# LoRA baseline (stock peft.LoraConfig — the always-on anchor)
-uv run python -m examples.train_lora_baseline --config examples/config/train_lora.yaml
+# LoRA baseline (stock peft.LoraConfig — the always-on anchor); the adapter is the config's `method:` field
+uv run python -m examples.train --config examples/config/train_lora.yaml          # train_lora.yaml sets method: lora
+#   variants of GaDRA itself:  --override method=gadra-mono   |   --override method=gadra-soft
 
 # Evaluate — deterministic, no key:  task: qa | gsm8k | mbpp  (MBPP needs HF_ALLOW_CODE_EVAL=1)
 uv run python -m examples.inference --config examples/config/inference.yaml
@@ -214,7 +215,9 @@ src/gadra/             # the pip-installable METHOD ONLY (zero data/eval deps)
   layer.py / gate.py   #   GaDRALinear + the gate (Gumbel-STE / softplus)
   model.py / _register.py  # BaseTuner + register_peft_method wiring
 examples/              # repo-only reproduction tooling (NOT in the wheel)
-  train.py / inference.py / train_lora_baseline.py   # config-driven entries
+  train.py / inference.py    # config-driven entries (train picks the adapter from the config's method:)
+  methods.py                 #   adapter-method registry: method: -> GaDRAConfig / LoraConfig
+  train_lora_baseline.py     #   DEPRECATED shim -> examples.train --override method=lora
   processing.py / evaluation.py / convert.py         # data / scorers+judge / legacy-ckpt converter
   config/              #   run-configs + DeepSpeed ZeRO-2 + chat template
   slurm/               #   uv SLURM wrappers

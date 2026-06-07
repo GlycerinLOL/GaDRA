@@ -17,11 +17,12 @@ driver ≥ 525.60.13) and the uv install.
 ## Run (config-driven, from the repo root)
 
 ```bash
-# Single-GPU training — GaDRA (variants: --override router_conditioning=mono / --override gate=soft)
+# Single-GPU training — the adapter is chosen by the config's `method:` field (default: gadra)
 uv run python -m examples.train --config examples/config/train.yaml
+#   variants: --override method=gadra-mono   |   --override method=gadra-soft
 
-# LoRA baseline (stock peft; the method GaDRA is compared against) — no `gadra` import
-uv run python -m examples.train_lora_baseline --config examples/config/train_lora.yaml
+# LoRA baseline (stock peft; the method GaDRA is compared against) — config sets `method: lora`
+uv run python -m examples.train --config examples/config/train_lora.yaml
 
 # Multi-GPU training — identical to the paper's workflow (accelerate launch + DeepSpeed ZeRO-2)
 uv run accelerate launch --num_processes <N_GPUS> \
@@ -44,8 +45,9 @@ the repo root) so SLURM file-path wrappers keep working.
 
 | Path | What |
 |---|---|
-| `train.py` | single training entry (GaDRA) — reads `config/train.yaml`, standard `transformers.Trainer` |
-| `train_lora_baseline.py` | LoRA baseline entry (stock `peft.LoraConfig`, no `gadra`) — reads `config/train_lora.yaml` |
+| `train.py` | single training entry for **all** methods — the adapter is chosen by the config's `method:` field (gadra \| gadra-mono \| gadra-soft \| lora); standard `transformers.Trainer` |
+| `methods.py` | adapter-method registry: `method:` → the right peft config (GaDRA\* via `GaDRAConfig`, baseline via stock `peft.LoraConfig`); add a baseline = one `@register` |
+| `train_lora_baseline.py` | **DEPRECATED** shim → forwards to `examples.train --override method=lora` (kept so old invocations / file-path wrappers keep working) |
 | `inference.py` | paper-repro eval entry — reads `config/inference.yaml`; `task: qa \| gsm8k \| mbpp` (deterministic) + `bbcqa \| tiebe` (GPT-judged Correct%) |
 | `processing.py` | data: tokenizer + EOS + FA2 `PackingCollator` (golden-tested, G2) |
 | `evaluation.py` | parsers + deterministic scorers (QA F1/EM, GSM8K EM, MBPP pass@1) + greedy runner + PPL (G3) + `GPTJudge` (BBC-QA / TiEBe Correct%, key from `OPENAI_API_KEY` env, not bit-exact) |

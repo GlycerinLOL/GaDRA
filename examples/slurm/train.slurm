@@ -19,8 +19,13 @@
 #   export SBATCH_ACCOUNT=<account> SBATCH_PARTITION=<partition>
 #
 # Knobs (env vars; paper defaults): N_GPUS (auto-detected), MBS=16 (per-device batch), GBS=128 (global batch),
-# DATASET=BBC_news, EXP_NAME=GaDRA, DATE=$(date +%Y%m%d). Output dir mirrors the research repo's layout:
+# DATASET=BBC_news, EXP_NAME=GaDRA, DATE=$(date +%Y%m%d), CONFIG=examples/config/train.yaml,
+# METHOD= (empty = use the config's method:; else gadra | gadra-mono | gadra-soft | lora). Output dir
+# mirrors the research repo's layout:
 #   save/<DATASET>/<DATE>/CPT/<EXP_NAME>   (a same dataset+date+exp_name re-run overwrites — clean slate).
+# Train any shipped method without editing files (EXP_NAME is just the dir label; METHOD picks the adapter):
+#   EXP_NAME=GaDRA-Mono METHOD=gadra-mono sbatch examples/slurm/train.slurm
+#   EXP_NAME=LoRA       METHOD=lora       sbatch examples/slurm/train.slurm
 # Multi-NODE is out of scope here (single node); ask if you need cross-node rendezvous.
 
 #SBATCH --job-name=gadra-cpt
@@ -83,6 +88,15 @@ rm -rf "${SAVE}"          # same dataset+date+exp_name re-run = clean slate (mat
 mkdir -p "${SAVE}"
 echo "output_dir: ${SAVE}"
 
+# --- Method + config selection (one entry: examples.train; the adapter is chosen by config/env) ---
+# CONFIG defaults to the GaDRA run-config; METHOD (optional) overrides the config's `method:` field so a
+# single wrapper trains any shipped method. METHOD carries no commas -> safe with sbatch's default env
+# forwarding (no --export=ALL,K=V comma split). Empty METHOD = honor whatever the CONFIG file sets.
+CONFIG="${CONFIG:-examples/config/train.yaml}"
+METHOD_OVERRIDE=()
+if [ -n "${METHOD:-}" ]; then METHOD_OVERRIDE=(--override "method=${METHOD}"); echo "method: ${METHOD}"; fi
+echo "config: ${CONFIG}"
+
 # --- Launch: accelerate + DeepSpeed ZeRO-2, one process per GPU; grad-accum keeps GBS fixed ---
 # `tee` mirrors the research repo (scripts/train.sh): a full copy of the run log lands inside the
 # output dir as log.txt (the "Running training" summary, model structure, samples, losses). pipefail
@@ -91,10 +105,11 @@ uv run --no-sync --offline accelerate launch \
     --num_machines "${SLURM_JOB_NUM_NODES:-1}" \
     --num_processes "${N_GPUS}" \
     --config_file examples/config/deepspeed_zero2.yaml \
-    -m examples.train --config examples/config/train.yaml \
+    -m examples.train --config "${CONFIG}" \
+    "${METHOD_OVERRIDE[@]}" \
     --override per_device_train_batch_size="${MBS}" \
     --override gradient_accumulation_steps="${GA}" \
     --override output_dir="${SAVE}" 2>&1 | tee "${SAVE}/log.txt"
 
 # Single-GPU variant (no accelerate/deepspeed; train.yaml already encodes GBS 128 = 16 x 8):
-#   uv run --no-sync --offline python -m examples.train --config examples/config/train.yaml 2>&1 | tee "${SAVE}/log.txt"
+#   uv run --no-sync --offline python -m examples.train --config "${CONFIG}" "${METHOD_OVERRIDE[@]}" 2>&1 | tee "${SAVE}/log.txt"

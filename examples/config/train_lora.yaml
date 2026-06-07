@@ -10,6 +10,9 @@ output_dir: out/lora-bbc
 chat_template_path: examples/config/llama3.2-Instruct.jinja   # optional; unused for plain PT text
 packing: fa2_collator                         # fa2_collator (paper-faithful, needs FA2) | group (portable, SDPA)
 
+# --- Method (stock peft.LoraConfig baseline; dispatched by examples/methods.py) ---
+method: lora                                  # the LoRA baseline — no router_conditioning / gate
+
 # --- LoRA adapter (matched to GaDRA's adapter for a fair baseline) ---
 r: 512
 lora_alpha: 1.0

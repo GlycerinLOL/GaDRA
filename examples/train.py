@@ -1,9 +1,11 @@
-"""Continual pre-training with GaDRA — single config-driven entry (standard ``transformers.Trainer``).
+"""Continual pre-training — single config-driven entry for every adapter method (standard ``transformers.Trainer``).
 
-GaDRA needs no custom trainer and no auxiliary loss — it trains with the plain causal-LM objective. This
-reads a YAML run-config (``examples/config/train.yaml``) so the launch surface is the config, not a flag
-soup. The recipe mirrors the paper (§A.1): AdamW, cosine schedule, BF16, sequence length 1024, gradient
-clipping 0.1, weight decay 0.01, seed 42, 3 epochs.
+The adapter is chosen by the run-config's ``method:`` field (gadra | gadra-mono | gadra-soft | lora),
+dispatched by ``examples/methods.py``; the recipe is method-agnostic. GaDRA needs no custom trainer and
+no auxiliary loss — it trains with the plain causal-LM objective. This reads a YAML run-config
+(``examples/config/train.yaml``) so the launch surface is the config, not a flag soup. The recipe mirrors
+the paper (§A.1): AdamW, cosine schedule, BF16, sequence length 1024, gradient clipping 0.1, weight decay
+0.01, seed 42, 3 epochs.
 
 Single-GPU::
 
@@ -37,9 +39,8 @@ import sys
 # (the latter is what some SLURM file-path wrappers use) by ensuring the repo root is importable.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import gadra  # noqa: E402, F401  (registers the "gadra" method with peft)
 from examples import load_run_config  # noqa: E402
-from gadra import GaDRAConfig  # noqa: E402
+from examples.methods import build_peft_config  # noqa: E402  (method -> peft config dispatch)
 
 logger = logging.getLogger("gadra.train")
 
@@ -94,7 +95,7 @@ def _configure_tracking(cfg: dict) -> str | list:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Continual pre-training with GaDRA (config-driven).")
+    p = argparse.ArgumentParser(description="Continual pre-training, config-driven (adapter chosen by the config's method: field).")
     p.add_argument("--config", required=True, help="Path to a YAML run-config (see examples/config/train.yaml).")
     p.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
                    help="Override a config field (YAML-typed value); repeatable.")
@@ -149,15 +150,7 @@ def main() -> None:
 
     model = _load_model(cfg["model_name_or_path"], packing)
 
-    peft_config = GaDRAConfig(
-        r=int(cfg.get("r", 512)),
-        lora_alpha=float(cfg.get("lora_alpha", 1.0)),
-        lora_dropout=float(cfg.get("lora_dropout", 0.05)),
-        target_modules=list(cfg.get("target_modules", ["up_proj", "gate_proj", "down_proj"])),
-        router_conditioning=cfg.get("router_conditioning", "dual"),
-        gate=cfg.get("gate", "hard"),
-        task_type="CAUSAL_LM",
-    )
+    peft_config = build_peft_config(cfg)  # method: gadra | gadra-mono | gadra-soft | lora (see examples/methods.py)
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
     if _is_main_process():
