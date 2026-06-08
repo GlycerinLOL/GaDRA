@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
-[![peft 0.16.0](https://img.shields.io/badge/peft-0.16.0-orange.svg)](https://github.com/huggingface/peft)
+[![peft 0.19.1](https://img.shields.io/badge/peft-0.19.1-orange.svg)](https://github.com/huggingface/peft)
 [![CI](https://github.com/GlycerinLOL/GaDRA/actions/workflows/ci.yml/badge.svg)](https://github.com/GlycerinLOL/GaDRA/actions/workflows/ci.yml)
 
 Official implementation of **GaDRA** (**Ga**ted **D**ual-conditioned **R**esidual **A**dapter), a HuggingFace
@@ -93,8 +93,8 @@ stays active (≈0.99) and <code>up_proj</code> high (≈0.88), while most <code
 
 Two entry points, by goal — **pick one**; they overlap (reproduction already includes the method).
 
-**A · Use GaDRA in your own project** — the method only (deps: `torch`, `transformers==4.53.3`,
-`peft==0.16.0`, `safetensors`; no data / eval / inference deps):
+**A · Use GaDRA in your own project** — the method only (deps: `torch`, `transformers==5.10.2`,
+`peft==0.19.1`, `safetensors`; no data / eval / inference deps):
 
 ```bash
 pip install gadra                                      # once released on PyPI

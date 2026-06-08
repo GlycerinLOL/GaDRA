@@ -156,7 +156,7 @@ def _load_model(base: str, adapter: str, attn_implementation: str = "sdpa"):
     from transformers import AutoModelForCausalLM
 
     base_model = AutoModelForCausalLM.from_pretrained(
-        base, torch_dtype=torch.bfloat16, device_map="auto", attn_implementation=attn_implementation
+        base, dtype=torch.bfloat16, device_map="auto", attn_implementation=attn_implementation
     )
     return PeftModel.from_pretrained(base_model, adapter).eval()
 

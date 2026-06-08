@@ -19,11 +19,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# peft==0.16.0 pinned: gadra._register enum-extension verified against this version.
+# peft==0.19.1 pinned: gadra._register enum-extension verified against this version.
+# transformers==5.10.2: transformers v5 requires peft>=0.18; MoE backbones require peft>=0.19.
 dependencies = [
-    "torch>=2.1",
-    "transformers==4.53.3",
-    "peft==0.16.0",
+    "torch>=2.4",
+    "transformers==5.10.2",
+    "peft==0.19.1",
     "safetensors>=0.4",
 ]
 

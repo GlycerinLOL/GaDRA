@@ -198,7 +198,7 @@ def _load_model(model_name_or_path: str, packing: str):
     attn_impl = "flash_attention_2" if packing == "fa2_collator" else "sdpa"
     try:
         return AutoModelForCausalLM.from_pretrained(
-            model_name_or_path, torch_dtype=torch.bfloat16, attn_implementation=attn_impl, use_cache=False
+            model_name_or_path, dtype=torch.bfloat16, attn_implementation=attn_impl, use_cache=False
         )
     except (ImportError, ValueError) as exc:
         if attn_impl != "flash_attention_2":
@@ -287,7 +287,6 @@ def main() -> None:
 
     training_args = TrainingArguments(
         output_dir=cfg["output_dir"],
-        overwrite_output_dir=True,
         num_train_epochs=float(cfg.get("num_train_epochs", 3.0)),
         max_steps=int(cfg.get("max_steps", -1)),  # -1 = honor num_train_epochs; >0 caps steps
         per_device_train_batch_size=int(cfg.get("per_device_train_batch_size", 16)),

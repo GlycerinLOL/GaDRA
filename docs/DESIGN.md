@@ -2,7 +2,7 @@
 
 How the GaDRA method maps to a HuggingFace `peft`-native custom tuner (`BaseTuner` /
 `BaseTunerLayer`), and the numeric-parity protocol against the original research implementation.
-Pinned environment: PyTorch 2.6.0, Transformers 4.53.3, peft 0.16.0, Python 3.12.
+Pinned environment: PyTorch 2.6.0, Transformers 5.10.2, peft 0.19.1, Python 3.12.
 
 For *using* the method, see the [README → Quick start](../README.md#quick-start). This document is
 the architecture reference.

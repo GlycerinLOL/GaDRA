@@ -13,7 +13,7 @@ import peft
 
 from ._enum_shim import ensure_gadra_peft_type
 
-_EXPECTED_PEFT_VERSION = "0.16.0"
+_EXPECTED_PEFT_VERSION = "0.19.1"
 
 
 def register_gadra() -> None:

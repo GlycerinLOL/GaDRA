@@ -1,6 +1,6 @@
 """Runtime extension of ``peft``'s closed ``PeftType`` enum with a ``GADRA`` member.
 
-``register_peft_method`` (peft 0.16.0) requires the method's upper-cased name to be an existing
+``register_peft_method`` (peft 0.19.1) requires the method's upper-cased name to be an existing
 ``PeftType`` member, so this splices ``GADRA`` into the enum at import. Idempotent.
 """
 
