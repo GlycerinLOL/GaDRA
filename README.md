@@ -215,9 +215,7 @@ src/gadra/             # the pip-installable METHOD ONLY (zero data/eval deps)
   layer.py / gate.py   #   GaDRALinear + the gate (Gumbel-STE / softplus)
   model.py / _register.py  # BaseTuner + register_peft_method wiring
 examples/              # repo-only reproduction tooling (NOT in the wheel)
-  train.py / inference.py    # config-driven entries (train picks the adapter from the config's method:)
-  methods.py                 #   adapter-method registry: method: -> GaDRAConfig / LoraConfig
-  train_lora_baseline.py     #   DEPRECATED shim -> examples.train --override method=lora
+  train.py / inference.py    # config-driven entries (train builds the adapter from the config's method: via its registry)
   processing.py / evaluation.py / convert.py         # data / scorers+judge / legacy-ckpt converter
   config/              #   run-configs + DeepSpeed ZeRO-2 + chat template
   slurm/               #   uv SLURM wrappers

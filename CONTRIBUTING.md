@@ -17,7 +17,7 @@ Run exactly what CI runs and keep it green:
 
 ```bash
 ruff check src tests examples            # lint
-pytest -q -m "not gpu" tests/            # method suite (27 tests; no data/GPU needed)
+pytest -q -m "not gpu" tests/            # method suite (no data/GPU needed)
 pytest -q -m "not gpu" examples/tests/   # reproduction tooling (CI-safe subset)
 uv lock --check                          # lockfile in sync with pyproject.toml
 ```

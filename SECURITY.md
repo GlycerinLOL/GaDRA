@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-GaDRA is pre-1.0. Security fixes land on the latest `main` and the newest release; pin a released version for
-stability and upgrade for fixes.
+Security fixes land on the latest `main` and the newest release; pin a released version for stability
+and upgrade for fixes.
 
 ## Reporting a vulnerability
 
