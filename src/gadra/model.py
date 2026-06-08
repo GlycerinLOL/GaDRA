@@ -144,14 +144,14 @@ class GaDRAModel(BaseTuner):
     def add_weighted_adapter(self, *args, **kwargs):
         raise NotImplementedError("GaDRA is non-mergeable; add_weighted_adapter() is not supported.")
 
-    def set_adapter(self, adapter_name: str | list[str]) -> None:
+    def set_adapter(self, adapter_name: str | list[str], inference_mode: bool = False) -> None:
         """Set the active adapter(s) and mark them trainable."""
         for module in self.model.modules():
             if isinstance(module, GaDRALinear):
                 if module.merged:
                     warnings.warn("Adapter cannot be set when the model is merged. Unmerging the model first.")
                     module.unmerge()
-                module.set_adapter(adapter_name)
+                module.set_adapter(adapter_name, inference_mode=inference_mode)
         self.active_adapter = adapter_name
 
     def __getattr__(self, name: str):
