@@ -72,3 +72,17 @@ def test_unsupported_model_ops_raise_notimplemented(op):
     tuner = _peft().base_model  # the GaDRAModel
     with pytest.raises(NotImplementedError):
         getattr(tuner, op)()
+
+
+def test_installed_peft_matches_validated_version():
+    # Env-drift guard: the running peft must match the version gadra's enum-shim / register and the
+    # BaseTuner overrides were validated against, so a stale local env fails here, not only on CI.
+    import peft
+
+    from gadra._register import _EXPECTED_PEFT_VERSION
+
+    assert peft.__version__ == _EXPECTED_PEFT_VERSION, (
+        f"installed peft=={peft.__version__} != validated peft=={_EXPECTED_PEFT_VERSION}; sync the env "
+        "to the pin (`uv sync` / `pip install -e .`), or if intentionally bumping update "
+        "_EXPECTED_PEFT_VERSION in src/gadra/_register.py and the pin in pyproject.toml together."
+    )
