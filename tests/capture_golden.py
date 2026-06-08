@@ -1,20 +1,6 @@
-"""P0 — freeze the golden parity baseline from the *original* GaDRA ``PeftBlock``.
+"""Capture golden outputs from the original GaDRA ``PeftBlock`` for parity testing.
 
-Runs the released ``peft_model.PeftBlock`` forward (imported verbatim from the source research repo)
-for all four shipped variants — dual/mono router conditioning x hard/soft gate — on a tiny CPU
-tensor, and saves weights + inputs + outputs to ``tests/_golden/``. The P2 ``GaDRALinear`` must
-reproduce these:
-
-* **eval mode** is the BIT-EXACT target (dropout off, Gumbel deterministic, softplus deterministic);
-* **train mode** is captured under a fixed pre-forward seed as the within-tolerance reference (its
-  RNG order — 2 dropout draws + 1 Gumbel ``rand_like`` per gated module — may differ across stacks).
-
-Run once on the execution host (or any CPU box with the env):
-
-    GADRA_SOURCE_REPO=/path/to/Adapter_Research \
-        python GaDRA/tests/capture_golden.py
-
-Output is deterministic given the seeds below, so re-running reproduces identical goldens.
+Run once with GADRA_SOURCE_REPO set. Saves weights + inputs + outputs to ``tests/_golden/``.
 """
 
 from __future__ import annotations
@@ -26,10 +12,9 @@ from pathlib import Path
 
 import torch
 
-# --- locate and import the original implementation -------------------------------------------------
+# locate and import the original implementation
 _SOURCE_REPO = os.environ.get("GADRA_SOURCE_REPO")
 if _SOURCE_REPO is None:
-    # tests/capture_golden.py -> GaDRA -> <source repo>
     _SOURCE_REPO = str(Path(__file__).resolve().parents[2])
 if _SOURCE_REPO not in sys.path:
     sys.path.insert(0, _SOURCE_REPO)
@@ -39,8 +24,7 @@ from peft_model import PeftBlock  # noqa: E402
 
 _GOLDEN_DIR = Path(__file__).resolve().parent / "_golden"
 
-# Tiny, gate-exercising dimensions. D_out must equal the adapter output dim so the dual gate's
-# concat([y0, delta]) and mono gate's [delta] have consistent shapes.
+# Tiny gate-exercising dimensions.
 _IN_FEATURES = 16
 _OUT_FEATURES = 24
 _RANK = 8
@@ -50,9 +34,7 @@ _DROPOUT = 0.05
 _GAMMA_THRESHOLD = 0.5
 _TRAIN_SEED = 4242
 
-# (variant_name, router_type, gamma_hard_masking, weight_seed) — router_type MA=dual / UniPELT=mono;
-# gamma_hard_masking Gumbel=hard / None=soft. Fixed per-variant seeds keep captures reproducible
-# (Python's hash() is process-randomized and must not be used for seeding).
+# (variant_name, router_type, gamma_hard_masking, weight_seed)
 _VARIANTS = [
     ("dual_hard", "MA", "Gumbel", 1001),
     ("dual_soft", "MA", None, 1002),
@@ -75,14 +57,11 @@ def _build_block(router_type: str, gamma_hard_masking) -> PeftBlock:
         gamma_hard_masking=gamma_hard_masking,
         gamma_threshold=_GAMMA_THRESHOLD,
     )
-    # compute_cr=False: analysis/diagnostics are out of scope and would add no-op branches.
     return PeftBlock(_IN_FEATURES, _OUT_FEATURES, cfg, compute_cr=False)
 
 
 def _randomize(block: PeftBlock, seed: int) -> None:
-    """Fill every parameter with N(0, 0.5) so the adapter delta is non-zero (B inits to zeros) and
-    the gate produces a non-trivial mix of 0/1 across tokens. Values are arbitrary — parity copies
-    this exact state_dict into the new layer."""
+    """Fill every parameter with N(0, 0.5) for a non-trivial, reproducible state."""
     gen = torch.Generator().manual_seed(seed)
     with torch.no_grad():
         for param in block.parameters():
@@ -97,15 +76,13 @@ def capture_variant(name: str, router_type: str, gamma_hard_masking, weight_seed
     x = torch.randn(_BATCH, _SEQ, _IN_FEATURES, generator=in_gen)
     y0 = torch.randn(_BATCH, _SEQ, _OUT_FEATURES, generator=in_gen)
 
-    # --- eval mode: bit-exact target ---
     block.eval()
     with torch.no_grad():
         eval_out = block(x, y0)
 
-    # --- train mode: controlled-RNG within-tolerance reference ---
     block.train()
     torch.manual_seed(_TRAIN_SEED)
-    train_out = block(x, y0)  # grad-enabled; detach before saving
+    train_out = block(x, y0)
 
     record = {
         "name": name,
@@ -120,7 +97,6 @@ def capture_variant(name: str, router_type: str, gamma_hard_masking, weight_seed
         },
         "dropout": _DROPOUT,
         "gamma_threshold": _GAMMA_THRESHOLD,
-        # PeftBlock key layout (activation='none'): adapter.0=A, adapter.1=B, gating.0=affine gate.
         "key_map": {"adapter.0.weight": "gadra_A", "adapter.1.weight": "gadra_B", "gating.0": "gadra_gate"},
         "state_dict": {k: v.detach().cpu() for k, v in block.state_dict().items()},
         "x": x,

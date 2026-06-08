@@ -1,17 +1,6 @@
-"""Capture the G3 scorer golden from the research repo's verbatim scorers (maintainer-only).
+"""Capture the scorer golden from the research repo's scorers (maintainer-only).
 
-Freezes the parent scorers' outputs on a diverse case set so ``test_evaluation.py`` can assert
-``examples.evaluation`` reproduces them exactly. Run once where the original repo is importable::
-
-    GADRA_SOURCE_REPO=/path/to/Adapter_Research python GaDRA/examples/tests/capture_eval_golden.py
-
-Writes ``examples/tests/_golden/eval_golden.pt`` (committed). Skips cleanly when the source repo is absent.
-
-GSM8K note: the golden mirrors the *inference path* ``inference_common.GSM8KEvaluator`` (RAW membership —
-its numeric-normalize lines are commented out), NOT the offline ``evaluate_gsm8k.compute_gsm8k_metrics``
-(which DOES normalize). The inference path is what produces the paper's GSM8K EM (``distribution_stats.json``
--> ``build_canonical_results.py``), so ``examples.evaluation.compute_gsm8k_metrics`` reproduces it verbatim.
-``normalize_numeric_answer`` is still imported — it remains a verbatim helper exercised by ``test_normalizers``.
+Run once with GADRA_SOURCE_REPO set. Writes ``examples/tests/_golden/eval_golden.pt``.
 """
 
 import os
@@ -32,11 +21,7 @@ from utils import llama_gsm8k_parse, llama_mbpp_parse  # noqa: E402
 
 
 def gsm8k_raw_result(prediction, answers):
-    """Mirror ``inference_common.GSM8KEvaluator.process_batch`` — RAW membership, no normalization.
-
-    Verbatim of the inference-path scorer (its ``normalize_*`` lines are commented out): parse the final
-    answer, then test exact string membership in the gold list. Shape matches
-    ``examples.evaluation.compute_gsm8k_metrics`` (``em`` is the per-sample 0/100 the aggregate sums)."""
+    """Mirror ``inference_common.GSM8KEvaluator.process_batch``: RAW string membership, no normalization."""
     parsed = llama_gsm8k_parse(prediction or "")
     gold = [str(a) for a in answers if a]
     is_correct = bool(parsed) and parsed in gold

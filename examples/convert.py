@@ -1,6 +1,6 @@
-"""One-time batch converter: legacy GaDRA checkpoint -> peft-native adapter.
+"""Batch converter: legacy GaDRA checkpoint -> peft-native adapter.
 
-Legacy layout (written by the research repo's ``PeftPatcher.save_peft_adapter``):
+Legacy layout:
 
     <ckpt>/LoRA/peft_config.json      # nested per-module config
     <ckpt>/LoRA/peft_model.bin        # state_dict keyed by full patched-model param paths,
@@ -10,7 +10,6 @@ New layout (standard peft):
 
     <out>/adapter_config.json         # flat GaDRAConfig (peft_type=GADRA)
     <out>/adapter_model.safetensors   # keys base_model.model.<path>.<mod>.gadra_{A,B,gate}.{weight,bias}
-                                      #   (no adapter name — peft re-inserts ".default" on load)
 
 Key map (per decoder layer, per MLP projection ``<mod>`` in {up_proj, down_proj, gate_proj}):
 
@@ -19,9 +18,8 @@ Key map (per decoder layer, per MLP projection ``<mod>`` in {up_proj, down_proj,
     ...mlp.peft_blocks.<mod>.gating.0.weight   ->  base_model.model.<...>.mlp.<mod>.gadra_gate.weight
     ...mlp.peft_blocks.<mod>.gating.0.bias     ->  base_model.model.<...>.mlp.<mod>.gadra_gate.bias
 
-Originals are read-only; the converter only writes under ``out_dir``. Out-of-scope checkpoints
-(whole-MLP ``mlp_external``, attention targets, ``svd_minor``/MiLoRA, ``STE``) are rejected at the
-config stage by :meth:`GaDRAConfig.from_legacy_peft_config`, or here for unrecognized weight keys.
+The converter only writes under ``out_dir``. Out-of-scope checkpoints (whole-MLP, attention targets,
+``svd_minor``/MiLoRA, ``STE``) are rejected at the config stage or here for unrecognized weight keys.
 """
 
 from __future__ import annotations
@@ -71,7 +69,6 @@ def _remap_key(old_key: str) -> str:
             f"Out-of-scope target module {mod!r} in key {old_key!r}; expected one of {sorted(_IN_SCOPE_MODULES)}."
         )
     gadra_layer = _SUB_TO_GADRA[m["sub"]]
-    # No adapter name in the saved file — peft re-inserts ".default" on load.
     return f"base_model.model.{m['path']}.{mod}.{gadra_layer}.{m['param']}"
 
 
@@ -125,8 +122,7 @@ def convert_checkpoint(old_dir: str | Path, out_dir: str | Path, *, allow_extra_
     key_map: dict[str, str] = {}
     skipped_keys: list[str] = []
     for old_key, tensor in old_state.items():
-        # Pure base params (e.g. embed_tokens / lm_head / norms left trainable) are not adapter
-        # weights — skip them. Adapter params always live under a ".peft_blocks." container.
+        # Adapter params live under a ".peft_blocks." container; skip pure base params.
         if ".peft_blocks." not in old_key:
             skipped_keys.append(old_key)
             continue

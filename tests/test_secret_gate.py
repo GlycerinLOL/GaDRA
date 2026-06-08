@@ -1,10 +1,4 @@
-"""Secret gate — no API-key-shaped literal may live in the package tree.
-
-The research repo carries live OpenAI keys (``run_inference.slurm``, ``evaluate_model_output_args.py``);
-this gate ensures none are ever copied into the package during a port. It matches realistic key shapes
-(``sk-...`` / ``sk-proj-...`` followed by a long run of key chars), NOT the bare ``sk-`` / ``sk-proj-``
-prefixes that legitimately appear in prose (e.g. docs describing this very gate).
-"""
+"""Secret gate: no API-key-shaped literal may live in the package tree."""
 
 import pathlib
 import re
@@ -14,10 +8,9 @@ SCAN_DIRS = ["src", "tests", "examples", "docs", ".github"]
 SCAN_FILES = ["pyproject.toml", "README.md"]
 TEXT_SUFFIXES = {".py", ".md", ".toml", ".jinja", ".txt", ".cfg", ".yaml", ".yml", ".json", ".sh"}
 
-# OpenAI-style secret: sk- or sk-proj- followed by a long key body. The {30,} run excludes the bare
-# "sk-proj-" mentioned in documentation.
+# Matches OpenAI-style key shapes; {30,} excludes bare prefixes in prose.
 KEY_RE = re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{30,}")
-# Generic high-entropy assignments to obvious secret names (defence in depth).
+# Generic high-entropy secret-name assignments.
 ASSIGN_RE = re.compile(r"""(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['"][^'"\s]{24,}['"]""")
 
 

@@ -1,16 +1,4 @@
-"""Unit tests for the inference entry's per-sample extraction + the shared run-config loader.
-
-These protect the "paper's RAW eval files run turnkey" path (``examples.inference`` mirrors the research
-harness's question / reference / doc-id / prompt derivation) and the ``--config`` / ``--override`` surface.
-All pure and deterministic: NO model load, tokenizer download, network, GPU, or secret — they run
-unconditionally in CI (unlike the source-gated G2/G3 parity goldens). A tiny fake tokenizer stands in for
-the only external seam (``apply_chat_template``).
-
-Three coverage classes:
-  * critical path     — extraction yields the documented values on real raw shapes (BBC-QA / GSM8K / TiEBe).
-  * failure branch    — clear, user-visible errors (no prompt source; malformed override; non-mapping config).
-  * input validation  — answer-list parsing variants, doc-id suffix handling, YAML-typed overrides.
-"""
+"""Unit tests for per-sample extraction and run-config loading in the inference entry."""
 
 from __future__ import annotations
 
@@ -30,16 +18,13 @@ from examples.inference import (
 
 
 class _FakeTokenizer:
-    """Records the chat-template call so tests can assert the prompt routed through it (no real tokenizer)."""
+    """Minimal tokenizer stub that records the chat-template call."""
 
     def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
         assert tokenize is False and add_generation_prompt is True
         return "<CHAT>" + "|".join(m.get("content", "") for m in messages) + "</CHAT>"
 
 
-# --------------------------------------------------------------------------------------------------
-# Critical path — extraction produces the documented values on the paper's RAW shapes.
-# --------------------------------------------------------------------------------------------------
 def test_bbcqa_raw_shape_extraction():
     """BBC-QA raw file: ``{id: '...-QA', messages: [user, assistant]}`` (no explicit question/answer)."""
     row = {
@@ -103,9 +88,6 @@ def test_load_documents_roundtrip(tmp_path):
     assert _load_documents(None) == {}
 
 
-# --------------------------------------------------------------------------------------------------
-# Failure branch — clear, user-visible errors.
-# --------------------------------------------------------------------------------------------------
 def test_build_prompt_raises_without_any_source():
     with pytest.raises(KeyError):
         _build_prompt({"unrelated": 1}, _FakeTokenizer(), use_raw_text=False)
@@ -125,9 +107,6 @@ def test_load_run_config_rejects_non_mapping(tmp_path):
         load_run_config(str(cfg), [])
 
 
-# --------------------------------------------------------------------------------------------------
-# Input validation / boundary handling.
-# --------------------------------------------------------------------------------------------------
 def test_answer_list_handles_list_stringified_scalar_and_missing():
     assert _answer_list({"answers": ["3", "4"]}) == ["3", "4"]          # real list
     assert _answer_list({"answers": "['a', 'b']"}) == ["a", "b"]        # Python-repr stringified list

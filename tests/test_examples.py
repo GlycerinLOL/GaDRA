@@ -1,8 +1,4 @@
-"""P4 smoke test — the example workflow runs on CPU with the standard ``transformers.Trainer``.
-
-Validates the paper's key plumbing claim: GaDRA trains with a plain causal-LM loss through the
-stock ``Trainer`` (no custom trainer, no aux loss), then saves, reloads, and generates.
-"""
+"""Smoke test: GaDRA trains with a plain ``Trainer``, saves, reloads, and generates."""
 
 from __future__ import annotations
 
@@ -50,7 +46,6 @@ def test_standard_trainer_trains_gadra_then_generates(tmp_path):
     base = _tiny_llama()
     model = get_peft_model(base, GaDRAConfig(r=8, gate="soft", task_type="CAUSAL_LM"))
 
-    # Snapshot a gate weight to confirm the optimizer actually updated the adapter.
     gate_before = None
     for m in model.modules():
         if isinstance(m, GaDRALinear):
@@ -74,7 +69,6 @@ def test_standard_trainer_trains_gadra_then_generates(tmp_path):
     result = trainer.train()
     assert result.training_loss is not None and result.training_loss > 0
 
-    # The adapter trained (gate weight moved).
     gate_after = None
     for m in model.modules():
         if isinstance(m, GaDRALinear):
@@ -82,7 +76,6 @@ def test_standard_trainer_trains_gadra_then_generates(tmp_path):
             break
     assert not torch.allclose(gate_before, gate_after)
 
-    # Save -> reload -> generate.
     model.save_pretrained(str(tmp_path / "adapter"))
     reloaded = PeftModel.from_pretrained(_tiny_llama(), str(tmp_path / "adapter"))
     reloaded.eval()

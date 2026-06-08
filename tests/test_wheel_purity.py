@@ -1,17 +1,4 @@
-"""Wheel-purity gate — the built ``gadra`` wheel ships the METHOD ONLY.
-
-After the reproduction tooling (``data`` / ``eval`` / ``compat``) moved out of ``src/`` into the repo-only
-``examples/`` tree, the wheel must contain exactly the method modules and zero data/eval/compat/jinja.
-
-Two checks, both in the package suite so they gate every PR in the deps-absent ``[dev]``-only CI job:
-(1) a fast, build-free assertion on setuptools package discovery; (2) the definitive build of the wheel +
-namelist AND metadata inspection (skips cleanly if a wheel build is unavailable in the environment).
-
-The metadata check guards the uv migration's core invariant: heavy reproduction deps (datasets / evaluate /
-accelerate / flash-attn / deepspeed) live in the PEP 735 ``[dependency-groups]`` (uv-local, never in wheel
-metadata), NOT in ``[project.optional-dependencies]`` (extras, which DO become ``Requires-Dist`` /
-``Provides-Extra``). Moving one into an extra by mistake would re-couple the published wheel — this fails it.
-"""
+"""Wheel-purity gate: the built ``gadra`` wheel ships the method only, with no reproduction tooling or heavy deps."""
 
 import glob
 import pathlib
@@ -23,7 +10,6 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
-# The 7 method modules that MUST ship.
 CORE = [
     "gadra/__init__.py",
     "gadra/_enum_shim.py",
@@ -33,10 +19,9 @@ CORE = [
     "gadra/layer.py",
     "gadra/model.py",
 ]
-# Reproduction tooling that must NEVER ship in the wheel.
+# Reproduction tooling that must never ship in the wheel.
 FORBIDDEN_PREFIXES = ("gadra/data/", "gadra/eval/", "gadra/compat/")
-# Heavy reproduction deps that must NEVER appear in the wheel's Requires-Dist (they live in the uv
-# `gpu` dependency-group, not in extras). Matched case-insensitively against the dist name.
+# Heavy reproduction deps that must never appear in Requires-Dist (belong in uv dependency-groups).
 FORBIDDEN_DIST = ("datasets", "evaluate", "accelerate", "flash-attn", "flash_attn", "deepspeed")
 
 
@@ -71,8 +56,6 @@ def test_built_wheel_ships_method_only(tmp_path):
     for core in CORE:
         assert core in names, f"core method module missing from wheel: {core}"
 
-    # Metadata purity: no heavy reproduction dep may appear as a Requires-Dist (they belong to the uv
-    # `gpu` dependency-group, never an extra). Catches a dep accidentally moved into optional-dependencies.
     with zipfile.ZipFile(wheels[0]) as zf:
         meta_name = next(n for n in names if n.endswith(".dist-info/METADATA"))
         metadata = zf.read(meta_name).decode("utf-8")

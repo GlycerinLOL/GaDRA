@@ -1,11 +1,6 @@
-"""Capture the G2 data-path golden from the research repo's ``Preprocessing`` (maintainer-only).
+"""Capture the data-path golden from the research repo's ``Preprocessing`` (maintainer-only).
 
-Freezes the parent pipeline's output on a few real BBC pretraining samples so ``test_processing.py`` can
-assert ``examples.processing`` reproduces it bit-for-bit. Run once on a host where the original repo is importable::
-
-    GADRA_SOURCE_REPO=/path/to/Adapter_Research python GaDRA/examples/tests/capture_data_golden.py
-
-Writes ``examples/tests/_golden/data_golden.pt`` (committed). Skips cleanly when the source repo is absent.
+Run once with GADRA_SOURCE_REPO set. Writes ``examples/tests/_golden/data_golden.pt``.
 """
 
 import json

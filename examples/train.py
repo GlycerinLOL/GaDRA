@@ -1,29 +1,9 @@
-"""Continual pre-training — single config-driven entry for every adapter method (standard ``transformers.Trainer``).
+"""Continual pre-training — config-driven entry for every adapter method (standard ``transformers.Trainer``).
 
 The adapter is chosen by the run-config's ``method:`` field (gadra | gadra-mono | gadra-soft | lora),
-dispatched by ``examples/methods.py``; the recipe is method-agnostic. GaDRA needs no custom trainer and
-no auxiliary loss — it trains with the plain causal-LM objective. This reads a YAML run-config
-(``examples/config/train.yaml``) so the launch surface is the config, not a flag soup. The recipe mirrors
-the paper (§A.1): AdamW, cosine schedule, BF16, sequence length 1024, gradient clipping 0.1, weight decay
-0.01, seed 42, 3 epochs.
-
-Single-GPU::
-
-    uv run python -m examples.train --config examples/config/train.yaml
-
-Multi-GPU (= the paper's workflow — ``accelerate launch`` + DeepSpeed ZeRO-2, processes = GPUs)::
-
-    uv run accelerate launch --num_processes <N> \
-        --config_file examples/config/deepspeed_zero2.yaml \
-        -m examples.train --config examples/config/train.yaml
-
-Ad-hoc overrides without editing the config: ``--override learning_rate=5e-4 --override packing=group``.
-
-Data packing (``packing:`` in the config):
-  * ``fa2_collator`` (default, paper-faithful) — per-document varlen packing; REQUIRES flash-attention-2.
-  * ``group`` (portable) — concatenate-and-chunk under SDPA; no flash-attn (not bit-exact to the paper).
-
-The training file is JSONL with a ``text`` field per line (pre-training format).
+dispatched by ``examples/methods.py``. GaDRA trains with the plain causal-LM objective (no custom trainer,
+no auxiliary loss). Configuration is read from a YAML run-config (``examples/config/train.yaml``); the
+training file is JSONL with a ``text`` field per line.
 """
 
 from __future__ import annotations
@@ -35,29 +15,22 @@ import os
 import pathlib
 import sys
 
-# Repo-only tooling: support both ``python -m examples.train`` and ``python examples/train.py``
-# (the latter is what some SLURM file-path wrappers use) by ensuring the repo root is importable.
+# Support both ``python -m examples.train`` and ``python examples/train.py`` by making the repo root importable.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from examples import load_run_config  # noqa: E402
-from examples.methods import build_peft_config  # noqa: E402  (method -> peft config dispatch)
+from examples.methods import build_peft_config  # noqa: E402
 
 logger = logging.getLogger("gadra.train")
 
 
 def _is_main_process() -> bool:
-    """True on rank 0 (or single-process runs). Reads the launcher's env, no torch.distributed needed."""
+    """True on rank 0 (or single-process runs); reads the launcher's env."""
     return int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")) or "0") <= 0
 
 
 def _setup_logging() -> None:
-    """Restore the original ``train_peft.py`` logging surface.
-
-    A timestamped root format plus ``transformers``/``datasets`` verbosity raised to INFO on the main
-    process. The verbosity bump is what makes ``Trainer`` emit its ``***** Running training *****``
-    summary (num examples, per-device / global batch size, gradient-accumulation steps, total
-    optimization steps, trainable params); at the default WARNING level that block is suppressed.
-    """
+    """Set up a timestamped root format and raise ``transformers``/``datasets`` verbosity to INFO on rank 0."""
     import datasets
     import transformers
 
@@ -77,11 +50,7 @@ def _setup_logging() -> None:
 
 
 def _configure_tracking(cfg: dict) -> str | list:
-    """Resolve ``report_to`` and, when W&B is requested, export project/entity from the config.
-
-    Default is ``none`` so a fresh clone / CI run never blocks on a missing W&B login. Set
-    ``report_to: wandb`` (+ ``wandb_project`` / ``wandb_entity``, or the ``WANDB_*`` env vars) to enable.
-    """
+    """Resolve ``report_to`` (default ``none``) and, when W&B is requested, export project/entity from the config."""
     report_to = cfg.get("report_to", "none")
     uses_wandb = "wandb" in (report_to if isinstance(report_to, (list, tuple)) else [report_to])
     if uses_wandb:
@@ -103,7 +72,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _load_model(model_name_or_path: str, packing: str):
-    """Load the base model with the attention impl the packing strategy requires (clear error if FA2 absent)."""
+    """Load the base model with the attention implementation the packing strategy requires."""
     import torch
     from transformers import AutoModelForCausalLM
 
@@ -150,11 +119,11 @@ def main() -> None:
 
     model = _load_model(cfg["model_name_or_path"], packing)
 
-    peft_config = build_peft_config(cfg)  # method: gadra | gadra-mono | gadra-soft | lora (see examples/methods.py)
+    peft_config = build_peft_config(cfg)  # method: gadra | gadra-mono | gadra-soft | lora
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
     if _is_main_process():
-        logger.info("model:\n%s", model)  # full module structure (mirrors train_peft.py)
+        logger.info("model:\n%s", model)
     if gradient_checkpointing:
         model.enable_input_require_grads()  # required for gradient checkpointing with a peft adapter
 
@@ -162,12 +131,12 @@ def main() -> None:
     num_proc = int(cfg.get("preprocessing_num_workers", 8))
     raw = load_dataset("json", data_files=cfg["train_file"], split="train")
     max_train_samples = cfg.get("max_train_samples")
-    if max_train_samples:  # smoke-run subsample (matches the original --max_train_samples)
+    if max_train_samples:  # smoke-run subsample
         raw = raw.select(range(min(int(max_train_samples), len(raw))))
     tokenized = pack_text_dataset(raw, tokenizer, max_length=max_seq_length, strategy=packing, num_proc=num_proc)
 
-    # Optional held-out validation (the original train/valid split): a separate JSONL in the same "text"
-    # format, packed identically. When set, it enables eval during training (eval_strategy="steps").
+    # Optional held-out validation: a separate JSONL in the same "text" format, packed identically.
+    # When set, it enables eval during training (eval_strategy="steps").
     validation_file = cfg.get("validation_file")
     eval_dataset = None
     if validation_file:
@@ -178,7 +147,7 @@ def main() -> None:
         logger.info("train packed examples: %d", len(tokenized))
         logger.info("eval packed examples: %s", len(eval_dataset) if eval_dataset is not None else "none (no validation_file)")
         for i in range(min(3, len(tokenized))):
-            logger.info("Sample %d: %s", i, tokenized[i])  # token-id rows (mirrors train_peft.py)
+            logger.info("Sample %d: %s", i, tokenized[i])
 
     if packing == "fa2_collator":
         collator = PackingCollator()
@@ -186,16 +155,14 @@ def main() -> None:
     else:
         collator = default_data_collator
 
-    # save_strategy="best" (the research-repo default) keeps only the lowest-eval-loss checkpoint, but it
-    # needs eval. Degrade to "steps" (with a warning) when no validation set is provided so a fresh run
-    # never crashes — provide validation_file to reproduce the original exactly.
+    # save_strategy="best" keeps only the lowest-eval-loss checkpoint but needs eval; degrade to "steps"
+    # (with a warning) when no validation set is provided.
     save_strategy = cfg.get("save_strategy", "steps")
     if save_strategy == "best" and eval_dataset is None:
         logger.warning("save_strategy='best' needs a validation_file; falling back to 'steps'.")
         save_strategy = "steps"
 
-    # Gradient-checkpointing reentrancy: null (default) leaves it to the library — matches the original
-    # run (resolved gradient_checkpointing_kwargs=None). Set false only if you hit a GC autograd error.
+    # Gradient-checkpointing reentrancy: null (default) leaves it to the library.
     gc_reentrant = cfg.get("gradient_checkpointing_use_reentrant")
     gc_kwargs = None if gc_reentrant is None else {"use_reentrant": bool(gc_reentrant)}
 
@@ -203,7 +170,7 @@ def main() -> None:
         output_dir=cfg["output_dir"],
         overwrite_output_dir=True,
         num_train_epochs=float(cfg.get("num_train_epochs", 3.0)),
-        max_steps=int(cfg.get("max_steps", -1)),  # -1 = honor num_train_epochs; >0 caps steps (smoke run)
+        max_steps=int(cfg.get("max_steps", -1)),  # -1 = honor num_train_epochs; >0 caps steps
         per_device_train_batch_size=int(cfg.get("per_device_train_batch_size", 16)),
         per_device_eval_batch_size=int(cfg.get("per_device_eval_batch_size", cfg.get("per_device_train_batch_size", 16))),
         gradient_accumulation_steps=int(cfg.get("gradient_accumulation_steps", 8)),
@@ -214,8 +181,8 @@ def main() -> None:
         max_grad_norm=float(cfg.get("max_grad_norm", 0.1)),
         optim=cfg.get("optim", "adamw_torch"),
         bf16=True,
-        bf16_full_eval=bool(cfg.get("bf16_full_eval", True)),  # eval in bf16 too (original)
-        average_tokens_across_devices=bool(cfg.get("average_tokens_across_devices", True)),  # token-weighted loss in distributed (original)
+        bf16_full_eval=bool(cfg.get("bf16_full_eval", True)),  # eval in bf16 too
+        average_tokens_across_devices=bool(cfg.get("average_tokens_across_devices", True)),  # token-weighted loss in distributed
         gradient_checkpointing=gradient_checkpointing,
         gradient_checkpointing_kwargs=gc_kwargs if gradient_checkpointing else None,
         logging_steps=int(cfg.get("logging_steps", 1)),
@@ -223,16 +190,14 @@ def main() -> None:
         save_steps=int(cfg.get("save_steps", 100)),
         save_total_limit=int(cfg.get("save_total_limit", 1)),
         metric_for_best_model=cfg.get("metric_for_best_model", "loss"),  # used when save_strategy=best
-        # Only the model/adapter is checkpointed — no optimizer / scheduler / RNG / global_step
-        # (matches the research repo; keeps 8B + DeepSpeed checkpoints small. Trade-off: can't resume.)
+        # Only the model/adapter is checkpointed — no optimizer / scheduler / RNG / global_step (can't resume).
         save_only_model=bool(cfg.get("save_only_model", True)),
         eval_strategy="steps" if eval_dataset is not None else "no",
         eval_steps=int(cfg.get("eval_steps", 100)),
         seed=seed,
-        # The original used remove_unused_columns=True under SFTTrainer; here the custom PackingCollator
-        # consumes the tokenized fields directly, so column pruning must stay off (does not affect numerics).
+        # PackingCollator consumes the tokenized fields directly, so column pruning must stay off.
         remove_unused_columns=False,
-        report_to=_configure_tracking(cfg),  # "none" (default) | "wandb" — see train.yaml
+        report_to=_configure_tracking(cfg),  # "none" (default) | "wandb"
         run_name=cfg.get("run_name") or os.path.basename(cfg["output_dir"].rstrip("/")),
     )
 

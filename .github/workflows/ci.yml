@@ -6,8 +6,7 @@ on:
   pull_request:
     branches: [main]
 
-# Least privilege: every job here only checks out + installs + lints + tests (no push / comment / release),
-# so a read-only token is sufficient and removes the default write-token supply-chain surface.
+# read-only token (no push/comment/release in this workflow)
 permissions:
   contents: read
 
@@ -30,8 +29,7 @@ jobs:
       - name: Install (method + dev ONLY — no datasets/evaluate/accelerate)
         run: |
           python -m pip install --upgrade pip
-          # CPU torch pinned to the parity-golden version: the bit-exact layer goldens were captured on
-          # torch 2.6.0; softplus (soft gate) drifts past atol=1e-6 on other torch builds. CPU wheel = fast.
+          # torch 2.6.0: parity-golden version (soft-gate goldens drift on other builds); CPU wheel.
           pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
 
@@ -55,7 +53,7 @@ jobs:
       - name: Install (method + dev + reproduction tooling deps)
         run: |
           python -m pip install --upgrade pip
-          # CPU torch 2.6.0 (parity-golden version); `.[dev]` brings pytest (requirements-repro has none).
+          # torch 2.6.0: parity-golden version; CPU wheel.
           pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]" -r requirements-repro.txt
 
