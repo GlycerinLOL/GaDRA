@@ -76,15 +76,17 @@ sbatch --gpus-per-node=4 examples/slurm/train.slurm
   [`examples/config/train.yaml`](../config/train.yaml). Edit it, or override at the bottom of the script.
 - **Method / variants**: set the `METHOD` env var — `METHOD=gadra-mono` (GaDRA-Mono), `METHOD=gadra-soft`
   (GaDRA-Soft), or `METHOD=lora` (the LoRA baseline) — e.g. `METHOD=gadra-mono sbatch examples/slurm/train.slurm`.
-  It overrides the config's `method:` field, so one wrapper trains any shipped method (no file edit). `METHOD`
-  is just the adapter; `EXP_NAME` is the output-dir label — set both to keep results tidy. Use a different
-  `CONFIG=...` to point at another run-config entirely.
+  It overrides the config's `method:` field, so one wrapper trains any shipped method (no file edit). The
+  save-dir label is the config's `exp_name:` field — set it alongside `method:` to keep results tidy, or set the
+  `EXP_NAME` env var to override it without editing the config. Use a different `CONFIG=...` to point at another
+  run-config entirely.
 - **Weights & Biases** (off by default): set `report_to: wandb` in [`train.yaml`](../config/train.yaml) and
   either fill `wandb_project` / `wandb_entity` there or export `WANDB_PROJECT` / `WANDB_ENTITY` before
   `sbatch` (they forward to the job). Run `uv run wandb login` once on the login node first.
-- **Output dir** `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/`, built by the script (knobs `DATASET=BBC_news`,
-  `EXP_NAME=GaDRA`, `DATE=$(date +%Y%m%d)`; e.g. `EXP_NAME=GaDRA-Mono METHOD=gadra-mono sbatch …`). A re-run
-  with the same dataset+date+exp_name **overwrites** it (clean slate).
+- **Output dir** `save/<DATASET>/<DATE>/CPT/<exp_name>/`, built by the script. The last component comes from
+  the config's `exp_name:` field (`GaDRA` by default); `DATASET=BBC_news` and `DATE=$(date +%Y%m%d)` are env
+  knobs, and `EXP_NAME` overrides the config's value (e.g. `EXP_NAME=GaDRA-Mono METHOD=gadra-mono sbatch …`).
+  A re-run with the same dataset+date+exp_name **overwrites** it (clean slate).
 - **GPU by default** — the script requests `--gpus-per-node=2` and trains on GPU (DeepSpeed `use_cpu: false`,
   one process per GPU); no extra step needed. Change the count with `sbatch --gpus-per-node=N`.
 

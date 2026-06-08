@@ -4,7 +4,8 @@
 model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
 train_file: data/BBC_news_alltime/Pretraining/v2-subset_5587/train_5587-eot.jsonl                 # JSONL {"text": ...} per line
 validation_file: data/BBC_news_alltime/Pretraining/v2-subset_5587/valid_5587-eot.jsonl          # optional; enables eval during training
-output_dir: out/gadra-bbc
+output_dir: out/gadra-bbc                                     # used directly for a manual (non-SLURM) run
+exp_name: GaDRA                                               # SLURM save-dir label: save/<DATASET>/<DATE>/CPT/<exp_name>
 chat_template_path: examples/config/llama3.2-Instruct.jinja   # optional; unused for plain PT text
 packing: fa2_collator                         # fa2_collator (needs FA2) | group (portable, SDPA)
 

@@ -48,21 +48,27 @@ echo "GPUs=${N_GPUS}  per_device_bs=${MBS}  grad_accum=${GA}  ->  global_batch=$
 [ "${EFF_GBS}" -ne "${GBS}" ] && \
     echo "WARNING: effective global batch ${EFF_GBS} != target ${GBS}; adjust GPU count / MBS / GBS." >&2
 
-# --- Output dir: save/<DATASET>/<DATE>/CPT/<EXP_NAME> ---
-DATASET="${DATASET:-BBC_news}"
-EXP_NAME="${EXP_NAME:-GaDRA}"
-DATE="${DATE:-$(date +%Y%m%d)}"
-[ -n "${DATASET}" ] && [ -n "${EXP_NAME}" ] && [ -n "${DATE}" ] || { echo "ERROR: DATASET/EXP_NAME/DATE must be non-empty" >&2; exit 2; }
-SAVE="save/${DATASET}/${DATE}/CPT/${EXP_NAME}"
-rm -rf "${SAVE}"          # same dataset+date+exp_name re-run overwrites
-mkdir -p "${SAVE}"
-echo "output_dir: ${SAVE}"
-
 # --- Method + config ---
 CONFIG="${CONFIG:-examples/config/train.yaml}"
 METHOD_OVERRIDE=()
 if [ -n "${METHOD:-}" ]; then METHOD_OVERRIDE=(--override "method=${METHOD}"); echo "method: ${METHOD}"; fi
 echo "config: ${CONFIG}"
+
+# --- Output dir: save/<DATASET>/<DATE>/CPT/<exp_name> ---
+# The method-related last component (exp_name) defaults from the run-config's exp_name: field;
+# set EXP_NAME to override it without editing the config.
+DATASET="${DATASET:-BBC_news}"
+DATE="${DATE:-$(date +%Y%m%d)}"
+if [ -z "${EXP_NAME:-}" ]; then
+    EXP_NAME=$(uv run --no-sync --offline python -c \
+        "import sys; from examples import load_run_config; print(load_run_config(sys.argv[1]).get('exp_name') or '')" \
+        "${CONFIG}")
+fi
+[ -n "${DATASET}" ] && [ -n "${EXP_NAME}" ] && [ -n "${DATE}" ] || { echo "ERROR: DATASET/DATE required and exp_name must be set in ${CONFIG} (or via EXP_NAME)" >&2; exit 2; }
+SAVE="save/${DATASET}/${DATE}/CPT/${EXP_NAME}"
+rm -rf "${SAVE}"          # same dataset+date+exp_name re-run overwrites
+mkdir -p "${SAVE}"
+echo "output_dir: ${SAVE}"
 
 # --- Launch ---
 uv run --no-sync --offline accelerate launch \
