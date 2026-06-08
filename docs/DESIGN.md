@@ -66,7 +66,7 @@ from gadra import GaDRAConfig
 from peft import get_peft_model, PeftModel
 from transformers import Trainer
 
-cfg = GaDRAConfig(r=512, lora_alpha=1, lora_dropout=0.05,
+cfg = GaDRAConfig(r=512, lora_alpha=512, lora_dropout=0.05,   # lora_alpha=r => peft scaling alpha/r = 1.0
                   target_modules=["up_proj", "gate_proj", "down_proj"],
                   router_conditioning="dual",   # "dual" (GaDRA) | "mono" (GaDRA-Mono)
                   gate="hard",                   # "hard" (Gumbel-STE) | "soft"
@@ -98,7 +98,7 @@ upstream PR. `GaDRAModel.prefix = "gadra_"`.
 base_out = base_layer(x)                  # frozen
 if disabled: return base_out
 x_d = dropout(x)                          # adapter-input dropout
-delta = lora_alpha * gadra_B(gadra_A(x_d))    # A: kaiming, B: zeros; no bias; α scale
+delta = (lora_alpha/r) * gadra_B(gadra_A(x_d))   # A: kaiming, B: zeros; no bias; peft alpha/r scaling
 sig   = delta if conditioning=="mono" else cat(base_out, delta)   # dual = [y0; delta]
 z     = gadra_gate(dropout(sig))          # affine -> scalar; b_g init positive (gates start open)
 gamma = hard:  train -> 1[gumbel_sigmoid(z,tau,thr) ]  (STE);  eval -> 1[sigmoid(z) > thr]

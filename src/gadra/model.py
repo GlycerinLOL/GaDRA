@@ -1,8 +1,7 @@
 """``GaDRAModel`` — the GaDRA tuner (``BaseTuner``) that injects ``GaDRALinear`` by name-matching.
 
-Mirrors ``peft.tuners.lora.LoraModel`` minus everything GaDRA does not support (no merging, no
-quantization dispatch, no weighted-adapter combination). ``get_peft_model``/``PeftModel`` dispatch
-here via ``config.peft_type == PeftType.GADRA`` once :func:`gadra._register.register_gadra` has run.
+Dispatched via ``config.peft_type == PeftType.GADRA`` once :func:`gadra._register.register_gadra`
+has run. No merging, no quantization dispatch, no weighted-adapter combination.
 """
 
 from __future__ import annotations
@@ -36,7 +35,9 @@ class GaDRAModel(BaseTuner):
     def _check_target_module_exists(gadra_config, key):
         return check_target_module_exists(gadra_config, key)
 
-    def _prepare_adapter_config(self, peft_config, model_config):
+    @staticmethod
+    def _prepare_adapter_config(peft_config, model_config):
+        # GaDRA applies its MLP-projection defaults by name; it does not consult model_config.
         if peft_config.target_modules is None:
             peft_config.target_modules = list(DEFAULT_TARGET_MODULES)
         return peft_config
@@ -53,7 +54,7 @@ class GaDRAModel(BaseTuner):
         if current_key is None:
             raise ValueError("Current Key shouldn't be `None`")
 
-        # Optional peft-standard per-module heterogeneity (paper config is uniform).
+        # optional peft-standard per-module heterogeneity
         r_key = get_pattern_key(gadra_config.rank_pattern.keys(), current_key)
         alpha_key = get_pattern_key(gadra_config.alpha_pattern.keys(), current_key)
         r = gadra_config.rank_pattern.get(r_key, gadra_config.r)
@@ -68,7 +69,7 @@ class GaDRAModel(BaseTuner):
             "gamma_threshold": gadra_config.gamma_threshold,
             "tau": gadra_config.tau,
             "gate_bias_init": gadra_config.gate_bias_init,
-            "init_weights": True,
+            "init_lora_weights": gadra_config.init_lora_weights,
         }
 
         if isinstance(target, GaDRALinear):
@@ -91,10 +92,10 @@ class GaDRAModel(BaseTuner):
 
     def _replace_module(self, parent, child_name, new_module, child):
         setattr(parent, child_name, new_module)
-        # child layer wraps the original module, unpack it
         if hasattr(child, "base_layer"):
             child = child.base_layer
 
+        # only the new gadra_* submodules need device placement (the base layer is reused)
         meta = torch.device("meta")
         for name, module in new_module.named_modules():
             if self.prefix in name:
@@ -132,6 +133,17 @@ class GaDRAModel(BaseTuner):
     def merge_adapter(self, *args, **kwargs):
         raise NotImplementedError("GaDRA is non-mergeable; merge_adapter() is not supported.")
 
+    def unload(self, *args, **kwargs):
+        raise NotImplementedError(
+            "GaDRA.unload() is not implemented; discard the PeftModel wrapper to recover the base model."
+        )
+
+    def delete_adapter(self, *args, **kwargs):
+        raise NotImplementedError("GaDRA.delete_adapter() is not implemented.")
+
+    def add_weighted_adapter(self, *args, **kwargs):
+        raise NotImplementedError("GaDRA is non-mergeable; add_weighted_adapter() is not supported.")
+
     def set_adapter(self, adapter_name: str | list[str]) -> None:
         """Set the active adapter(s) and mark them trainable."""
         for module in self.model.modules():
@@ -147,6 +159,6 @@ class GaDRAModel(BaseTuner):
         try:
             return super().__getattr__(name)
         except AttributeError:
-            if name == "model":  # see peft#1892: avoid recursion before init
+            if name == "model":  # avoid recursion before init
                 raise
             return getattr(self.model, name)

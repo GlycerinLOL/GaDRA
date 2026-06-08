@@ -1,8 +1,4 @@
-"""P1 gate — GaDRAConfig defaults, serialization round-trip, legacy ingestion, scope guards.
-
-These tests do not require the ``gadra`` method to be registered (P2), so they exercise the config
-layer in isolation: enum shim, dataclass round-trip, and ``from_legacy_peft_config`` mapping/guards.
-"""
+"""GaDRAConfig defaults, serialization round-trip, legacy ingestion, and scope guards."""
 
 from __future__ import annotations
 
@@ -15,7 +11,6 @@ from gadra import GaDRAConfig
 from gadra._enum_shim import ensure_gadra_peft_type
 from peft.utils.peft_types import PeftType
 
-# Canonical legacy GaDRA configs in the source research repo.
 _SOURCE_REPO = Path(__file__).resolve().parents[2]
 _CONFIGS = _SOURCE_REPO / "configs"
 
@@ -34,11 +29,11 @@ def test_defaults_are_paper_faithful():
     cfg = GaDRAConfig()
     assert cfg.peft_type is PeftType.GADRA
     assert cfg.r == 512
-    assert cfg.lora_alpha == 1.0
+    assert cfg.lora_alpha == 512  # alpha/r scaling -> effective scale 1.0
     assert cfg.target_modules == ["up_proj", "gate_proj", "down_proj"]
     assert cfg.router_conditioning == "dual"
     assert cfg.gate == "hard"
-    assert cfg.gate_bias_init is None  # released-code behavior (default nn.Linear init)
+    assert cfg.gate_bias_init is None
 
 
 @pytest.mark.parametrize("conditioning", ["dual", "mono"])
@@ -68,15 +63,13 @@ def test_invalid_choices_raise():
 
 
 def test_from_legacy_dual_and_mono():
-    # Reads the source research repo's real legacy configs (parents[2]/configs); absent in a standalone
-    # checkout / CI, so skip there. The conversion logic itself is covered by the synthetic-spec tests below.
     if not (_CONFIGS / "peft_config.json").exists():
-        pytest.skip("source-repo configs/ not present (standalone checkout) — synthetic-spec tests cover from_legacy")
+        pytest.skip("source-repo configs/ not present — synthetic-spec tests cover from_legacy")
     dual = GaDRAConfig.from_legacy_peft_config(json.loads((_CONFIGS / "peft_config.json").read_text()))
     assert dual.router_conditioning == "dual"
     assert dual.gate == "hard"
     assert dual.r == 512
-    assert dual.lora_alpha == 1.0
+    assert dual.lora_alpha == 512  # alpha/r = 1.0
     assert dual.lora_dropout == 0.05
     assert set(dual.target_modules) == {"up_proj", "down_proj", "gate_proj"}
 

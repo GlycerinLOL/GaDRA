@@ -1,8 +1,4 @@
-"""CPU-only construction-parity tests for the method registry (no GPU / data / model download).
-
-These pin that the unified ``method:`` dispatch (examples/methods.py) builds the SAME peft config the
-two former entry scripts built, and that the variant presets + the lora guard behave as designed.
-"""
+"""Construction-parity tests for the method registry (``examples/methods.py``)."""
 
 from __future__ import annotations
 
@@ -12,9 +8,8 @@ from examples.methods import available, build_peft_config
 
 
 def _base(**extra):
-    """A minimal adapter-knob config (the shared LoRA-family fields); add a `method` etc. via kwargs."""
-    cfg = dict(r=512, lora_alpha=1.0, lora_dropout=0.05,
-               target_modules=["up_proj", "gate_proj", "down_proj"])
+    """A minimal adapter-knob config; lora_alpha omitted so each method exercises its own default."""
+    cfg = dict(r=512, lora_dropout=0.05, target_modules=["up_proj", "gate_proj", "down_proj"])
     cfg.update(extra)
     return cfg
 
@@ -45,13 +40,12 @@ def test_gadra_presets(method, router, gate):
 def test_shared_adapter_fields_are_faithful():
     pc = build_peft_config(_base(method="gadra"))
     assert pc.r == 512
-    assert pc.lora_alpha == 1.0
+    assert pc.lora_alpha == 512  # alpha/r = 1.0
     assert pc.lora_dropout == 0.05
     assert list(pc.target_modules) == ["up_proj", "gate_proj", "down_proj"]
 
 
 def test_explicit_knob_overrides_preset():
-    # An explicit cfg value (YAML / --override) wins over the variant preset.
     pc = build_peft_config(_base(method="gadra-mono", router_conditioning="dual"))
     assert pc.router_conditioning == "dual"
 
@@ -66,6 +60,38 @@ def test_lora_builds_stock_loraconfig():
     assert type(pc).__name__ == "LoraConfig"
     assert not hasattr(pc, "gate")
     assert not hasattr(pc, "router_conditioning")
+
+
+def test_gadra_alpha_defaults_to_r():
+    # Default lora_alpha = r => effective scale 1.0.
+    pc = build_peft_config(_base(method="gadra"))  # no explicit lora_alpha, r=512
+    assert pc.lora_alpha == 512
+
+
+def test_lora_alpha_defaults_to_r_for_unit_effective_scale():
+    # Default alpha = r => effective scale 1.0; guards against accidental near-no-op alpha=1.0.
+    pc = build_peft_config(_base(method="lora"))
+    assert pc.lora_alpha == 512  # alpha/r = 1.0
+    pc2 = build_peft_config(_base(method="lora", r=128))
+    assert pc2.lora_alpha == 128  # alpha/r = 1.0
+
+
+def test_lora_explicit_alpha_is_native_semantics():
+    pc = build_peft_config(_base(method="lora", r=512, lora_alpha=1024))
+    assert pc.lora_alpha == 1024
+
+
+def test_lora_alpha_is_int_typed():
+    assert isinstance(build_peft_config(_base(method="lora")).lora_alpha, int)
+
+
+def test_lora_forwards_native_peft_knobs():
+    pc = build_peft_config(_base(method="lora", use_rslora=True, init_lora_weights=False, bias="all"))
+    assert pc.use_rslora is True
+    assert pc.init_lora_weights is False
+    assert pc.bias == "all"
+    assert build_peft_config(_base(method="lora", use_dora=True)).use_dora is True
+    assert build_peft_config(_base(method="lora", lora_bias=True)).lora_bias is True
 
 
 @pytest.mark.parametrize("knob", ["router_conditioning", "gate", "gamma_threshold", "tau", "gate_bias_init"])

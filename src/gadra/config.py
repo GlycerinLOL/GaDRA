@@ -1,17 +1,13 @@
 """``GaDRAConfig`` — a flat, ``LoraConfig``-idiomatic configuration for the GaDRA tuner.
 
-GaDRA = Gated Dual-conditioned Residual Adapter. The paper uses **uniform** settings across the
-three MLP projections, so this config is flat (LoRA-style ``r`` / ``lora_alpha`` / ``lora_dropout``
-/ ``target_modules``) plus the GaDRA gate fields, rather than a nested per-module map.
-
-Output: ``y = y0 + gamma * delta`` with ``delta = lora_alpha * B(A(x))`` (no ``/r`` division; the
-paper's ``alpha`` is the residual scale, with ``alpha = 1`` in all published runs). ``gamma`` is a
-per-token scalar produced by a per-module affine gate. Non-mergeable by construction (``gamma`` is
-input-dependent) — merging is refused in the layer.
+GaDRA = Gated Dual-conditioned Residual Adapter. Output: ``y = y0 + gamma * delta`` with
+``delta = (lora_alpha / r) * B(A(x))`` and ``gamma`` a per-token scalar from a per-module affine
+gate. Non-mergeable (``gamma`` is input-dependent).
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
@@ -20,17 +16,15 @@ from peft.utils.peft_types import PeftType
 
 from ._enum_shim import ensure_gadra_peft_type
 
-# PeftType.GADRA must exist before it is referenced as a field default below.
 ensure_gadra_peft_type()
 
-#: Paper-faithful default targets: the three Llama/Qwen MLP projections (name-matched on any model).
+#: Default targets: the three MLP projections (name-matched on any model).
 DEFAULT_TARGET_MODULES = ["up_proj", "gate_proj", "down_proj"]
 
 ROUTER_CONDITIONING_CHOICES = ("dual", "mono")
 GATE_CHOICES = ("hard", "soft")
 
-# Legacy nested-config fields that the converter ingests and drops (regularizers, analysis knobs,
-# out-of-scope method variants). See docs/DESIGN.md §3 / §7.
+# Legacy nested-config fields the converter ingests and drops.
 _LEGACY_TOP_LEVEL_DROP = frozenset(
     {
         "peft_block_name",
@@ -59,30 +53,34 @@ class GaDRAConfig(PeftConfig):
     """Configuration for the GaDRA PEFT method.
 
     Args:
-        r: LoRA rank of the residual adapter (paper: 512).
+        r: LoRA rank of the residual adapter.
         target_modules: Module name(s) to wrap (name-matched). Defaults to the three MLP projections.
-        lora_alpha: Residual scale ``alpha`` in ``delta = alpha * B(A(x))`` (paper: 1). Applied
-            directly, NOT divided by ``r`` (this differs from the standard LoRA ``alpha/r`` scaling).
+        lora_alpha: LoRA scaling numerator; ``delta`` is scaled by ``lora_alpha / r``. Defaults to
+            ``r`` (effective scale 1.0).
         lora_dropout: Dropout applied to the adapter input and, separately, to the gate input.
-        router_conditioning: ``"dual"`` (GaDRA, gate sees ``[y0; delta]``) or ``"mono"``
-            (GaDRA-Mono, gate sees ``delta`` only).
-        gate: ``"hard"`` (binary Gumbel-sigmoid STE in training; deterministic ``1[sigmoid(z)>thr]``
-            at inference) or ``"soft"`` (continuous gate).
+        router_conditioning: ``"dual"`` (gate sees ``[y0; delta]``) or ``"mono"`` (gate sees ``delta``).
+        gate: ``"hard"`` (Gumbel-sigmoid STE) or ``"soft"`` (continuous).
         gamma_threshold: Decision threshold for the hard gate.
-        tau: Gumbel-sigmoid temperature (paper: 1.0, no annealing).
-        gate_bias_init: Initial value for the gate bias ``b_g``. ``None`` reproduces the released
-            code (default ``nn.Linear`` init). A positive float matches the paper-text description
-            ("gates start open"); the released runs used the default init.
-        rank_pattern / alpha_pattern: Optional peft-standard per-module overrides for heterogeneity
-            (unused by the paper's uniform config).
-        modules_to_save: Standard peft passthrough.
+        tau: Gumbel-sigmoid temperature.
+        gate_bias_init: Initial value for the gate bias; ``None`` = default ``nn.Linear`` init.
+        rank_pattern / alpha_pattern: Optional peft-standard per-module overrides.
+        modules_to_save: Extra modules to set trainable and save.
+        init_lora_weights: ``True`` = A kaiming, B zeros (delta 0 at start); ``False`` = default
+            ``nn.Linear`` init (random B). Bool only.
+        exclude_modules: Module name(s) to exclude from ``target_modules``.
+
+    ``target_modules`` is kept as an ordered ``list``; ``layers_to_transform`` / ``layers_pattern``
+    are unsupported.
     """
 
     r: int = field(default=512, metadata={"help": "LoRA rank of the residual adapter."})
     target_modules: Optional[Union[list[str], str]] = field(
         default=None, metadata={"help": "Module name(s) to wrap; defaults to the three MLP projections."}
     )
-    lora_alpha: float = field(default=1.0, metadata={"help": "Residual scale alpha (delta = alpha * B @ A @ x)."})
+    lora_alpha: Optional[float] = field(
+        default=None,
+        metadata={"help": "LoRA scaling numerator; delta scaled by lora_alpha/r. None -> r (effective scale 1.0)."},
+    )
     lora_dropout: float = field(default=0.05, metadata={"help": "Dropout on adapter input and gate input."})
     router_conditioning: str = field(
         default="dual", metadata={"help": "'dual' (GaDRA) or 'mono' (GaDRA-Mono)."}
@@ -97,6 +95,14 @@ class GaDRAConfig(PeftConfig):
     alpha_pattern: Optional[dict] = field(default_factory=dict, metadata={"help": "Per-module alpha overrides."})
     modules_to_save: Optional[list[str]] = field(
         default=None, metadata={"help": "List of modules (besides adapters) to set trainable and save."}
+    )
+    init_lora_weights: bool = field(
+        default=True,
+        metadata={"help": "True=LoRA-standard init (A kaiming, B zeros, delta=0 at start); "
+                          "False=default nn.Linear init (random B). Bool only (no gaussian/pissa)."},
+    )
+    exclude_modules: Optional[Union[list[str], str]] = field(
+        default=None, metadata={"help": "peft-standard module name(s) to exclude from target_modules."}
     )
 
     def __post_init__(self):
@@ -114,6 +120,8 @@ class GaDRAConfig(PeftConfig):
             raise ValueError(f"gate must be one of {GATE_CHOICES}, got: {self.gate}")
         if self.r <= 0:
             raise ValueError(f"r must be > 0, got: {self.r}")
+        if self.lora_alpha is None:
+            self.lora_alpha = float(self.r)
         if self.tau <= 0:
             raise ValueError(f"tau must be > 0, got: {self.tau}")
 
@@ -122,17 +130,21 @@ class GaDRAConfig(PeftConfig):
         """Build a flat ``GaDRAConfig`` from a legacy nested ``peft_config.json`` dict.
 
         Maps ``router_type`` (MA→dual, UniPELT→mono) and ``gamma_hard_masking`` (Gumbel→hard,
-        None→soft), asserts the three target modules are uniform and in scope, and drops all
-        regularizer / analysis / out-of-scope-variant fields. Raises for configs outside the GaDRA
-        paper scope (svd_minor, Add/relu, STE, mlp_external, partial layer DSL).
+        None→soft); requires uniform, in-scope target modules and raises for out-of-scope configs.
         """
         modules = legacy.get("target_modules")
         if not isinstance(modules, dict) or not modules:
             raise ValueError("legacy config must carry a non-empty nested 'target_modules' dict")
 
-        # Legacy conversion is paper-faithful: only the three MLP projections are convertible.
-        # (The runtime tuner stays generic and can wrap any Linear, but attention adapters, whole-MLP
-        # wrappers, etc. have a different weight layout / are out of the published method's scope.)
+        # warn on any legacy top-level key that is neither consumed nor in the known-drop set
+        unexpected = set(legacy) - {"target_modules"} - _LEGACY_TOP_LEVEL_DROP
+        if unexpected:
+            warnings.warn(
+                f"from_legacy_peft_config: ignoring unrecognized legacy top-level key(s) {sorted(unexpected)}",
+                stacklevel=2,
+            )
+
+        # only the three MLP projections are convertible
         _convertible_modules = {"up_proj", "down_proj", "gate_proj"}
         out_of_scope = [name for name in modules if name not in _convertible_modules]
         if out_of_scope:
@@ -141,7 +153,7 @@ class GaDRAConfig(PeftConfig):
                 f"{sorted(_convertible_modules)} (the paper's MLP projections) are convertible"
             )
 
-        # Reject out-of-scope partial-layer selection (the gate budget is learned, not hand-set).
+        # partial-layer selection is out of scope
         for key in ("gate_layers", "peft_layers"):
             val = legacy.get(key)
             if val not in (None, "all"):
@@ -176,8 +188,6 @@ class GaDRAConfig(PeftConfig):
         if gate is None:
             raise ValueError(f"gamma_hard_masking {hard_masking!r} is out of scope (expected 'Gumbel' or null)")
 
-        # GaDRAConfig applies alpha to delta (delta = alpha * B@A) and is bit-exact to the original
-        # only when the legacy output_scalar (which scaled the gate, not the adapter) is 1.0.
         output_scalar = float(first.get("output_scalar", 1.0))
         if output_scalar != 1.0:
             raise ValueError(
@@ -185,10 +195,11 @@ class GaDRAConfig(PeftConfig):
                 "to delta and reproduces the original only for output_scalar == 1.0 (the paper setting)."
             )
 
+        peft_rank = int(first.get("peft_rank", 512))
         return cls(
-            r=int(first.get("peft_rank", 512)),
+            r=peft_rank,
             target_modules=list(modules.keys()),
-            lora_alpha=output_scalar,
+            lora_alpha=output_scalar * peft_rank,
             lora_dropout=float(first.get("dropout", 0.05)),
             router_conditioning=conditioning,
             gate=gate,
