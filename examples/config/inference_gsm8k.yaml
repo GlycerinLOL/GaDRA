@@ -8,5 +8,5 @@ chat_template_path: null                        # null = no chat template (the 8
 task: gsm8k
 eval_file: data/GSM8K/gsm8k_llama_test.jsonl                # original: datasets/GSM8K/gsm8k_llama_test.jsonl (8-shot `text` + `answer`/`answers`)
 use_raw_text: true                              # use the pre-formatted 8-shot `text` field verbatim
-batch_size: 16
+batch_size: 32
 max_new_tokens: 256
