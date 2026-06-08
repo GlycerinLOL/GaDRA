@@ -17,4 +17,5 @@ Everything in here is **gitignored except this README**, so your corpora / eval 
 Keep the default file names above, or point the config at your paths
 (`--override train_file=data/<your>.jsonl` / `--override eval_file=data/<your>.jsonl`).
 
-Full format spec + per-task fields: the repo [README → Data](../README.md#data-you-provide-it).
+Per-task eval fields (`qa` / `gsm8k` / `mbpp` / `bbcqa` / `tiebe`) are documented inline in
+[`../examples/config/inference.yaml`](../examples/config/inference.yaml).

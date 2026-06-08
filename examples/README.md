@@ -11,7 +11,7 @@ config-driven entry scripts. It lives outside `src/`, so it is never built into 
 uv sync --group gpu          # cu124 torch + prebuilt flash-attn + deepspeed + datasets/evaluate/accelerate/pyyaml
 ```
 
-See the repo [README → Reproducing the paper](../README.md#reproducing-the-paper) for prerequisites
+See the repo [README → Installation](../README.md#installation) for prerequisites
 (NVIDIA driver ≥ 525.60.13) and the uv install.
 
 ## Run (config-driven, from the repo root)
@@ -25,12 +25,36 @@ uv run python -m examples.train --config examples/config/train.yaml
 uv run python -m examples.inference --config examples/config/inference.yaml
 ```
 
-Multi-GPU (accelerate + DeepSpeed ZeRO-2) and GPT-judged eval (`bbcqa` / `tiebe`) are in the repo
-[README → Reproducing the paper](../README.md#reproducing-the-paper).
+Multi-GPU (accelerate + DeepSpeed ZeRO-2):
+
+```bash
+# For N GPUs, hold the paper's global batch size 128: gradient_accumulation_steps = 128 / (16 * N)
+# (the SLURM wrapper computes this automatically).
+uv run accelerate launch --num_processes <N_GPUS> \
+    --config_file examples/config/deepspeed_zero2.yaml \
+    -m examples.train --config examples/config/train.yaml
+```
+
+GPT-judged eval (`bbcqa` / `tiebe`, "Correct %") — the key is read from the environment, never the repo:
+
+```bash
+export OPENAI_API_KEY=sk-...
+uv run python -m examples.inference --config examples/config/inference.yaml --override task=bbcqa
+```
+
+The eval derives each sample's prompt / reference / judge inputs exactly as the research harness does, so the
+paper's raw eval files work directly: the deterministic metrics (QA char-F1/EM, GSM8K EM, MBPP pass@1) reproduce
+bit-for-bit; `bbcqa` / `tiebe` use the verbatim GPT judge and are method-equivalent (they call OpenAI). Which
+numbers are bit-exact: [`../docs/FAQ.md`](../docs/FAQ.md).
+
+**SLURM** (offline compute nodes): set `GADRA_REPO`, pre-sync once on the login node
+(`uv sync --group gpu --locked`), then `sbatch examples/slurm/{train,inference}.slurm` — full walkthrough in
+[`slurm/README.md`](slurm/README.md). On an account/partition cluster set
+`export SBATCH_ACCOUNT=... SBATCH_PARTITION=...` once.
 
 **Data is not shipped.** The configs point at `data/*.jsonl` placeholders — supply your own and edit the
-config (or `--override train_file=... eval_file=...`). See the repo
-[README → Data](../README.md#data-you-provide-it) for the JSONL formats, fields, and where to put the files.
+config (or `--override train_file=... eval_file=...`). See [`../data/README.md`](../data/README.md) for the
+JSONL formats, fields, and where to put the files.
 
 Override any config field on the CLI (YAML-typed): `--override learning_rate=5e-4 --override packing=group`.
 The scripts also tolerate a direct `python examples/<script>.py` invocation (a small `sys.path` shim adds

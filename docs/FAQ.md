@@ -45,6 +45,6 @@ template + greedy params. BBC-QA / TiEBe "Correct %" use the GPT judge and are m
 bit-exact (they depend on the OpenAI model version).
 
 **Data isn't included.**
-Correct — supply your own JSONL (see [README → Data](../README.md#data-you-provide-it) for the formats, the
-config fields to set, and where to put the files). The paper uses BBC-News / CC news corpora; any in-domain
-text in the documented format works.
+Correct — supply your own JSONL (see [`data/README.md`](../data/README.md) for the formats, the config fields
+to set, and where to put the files). The paper uses BBC-News / CC news corpora; any in-domain text in the
+documented format works.

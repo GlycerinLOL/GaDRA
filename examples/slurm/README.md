@@ -181,7 +181,7 @@ tail -f slurm-logs/<jobid>.err               # errors
 Data is **not** shipped. For SLURM the files must live on the **shared filesystem** (readable from the offline
 compute nodes); the simplest place is a gitignored `data/` dir inside `$GADRA_REPO`. Set `train_file` /
 `eval_file` (+ `documents_file` for `bbcqa`) in the configs, or `--override` them. Formats + fields:
-[repo README → Data](../../README.md#data-you-provide-it).
+[`data/README.md`](../../data/README.md).
 
 ## Troubleshooting
 
