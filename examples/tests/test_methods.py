@@ -1,10 +1,10 @@
-"""Construction-parity tests for the method registry (``examples/methods.py``)."""
+"""Construction-parity tests for the method registry (``examples/train.py``)."""
 
 from __future__ import annotations
 
 import pytest
 
-from examples.methods import available, build_peft_config
+from examples.train import available, build_peft_config
 
 
 def _base(**extra):
