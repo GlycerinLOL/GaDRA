@@ -32,7 +32,7 @@ frozen base output <code>y⁰</code> and the LoRA residual <code>δ</code>, deci
 when it closes (<code>γₜ=0</code>) the module output is bit-identical to the frozen base.</em></p>
 
 For an adapted module at sequence position $t$, standard LoRA is always-on: $y_t = y_t^{0} + \delta_t$, with
-$\delta_t = \alpha\,BA\,x_t$. GaDRA inserts a per-position gate $\gamma_t \in \{0,1\}$:
+$\delta_t = \frac{\alpha}{r}\,BA\,x_t$ (standard peft scaling; $\alpha=$ `lora_alpha`, $=r$ for unit scale). GaDRA inserts a per-position gate $\gamma_t \in \{0,1\}$:
 
 $$
 y_t = y_t^{0} + \gamma_t\,\delta_t
@@ -133,7 +133,7 @@ from transformers import AutoModelForCausalLM, Trainer
 
 base = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
 cfg = GaDRAConfig(
-    r=512, lora_alpha=1, lora_dropout=0.05,
+    r=512, lora_alpha=512, lora_dropout=0.05,   # lora_alpha=r => peft scaling alpha/r = 1.0
     target_modules=["up_proj", "gate_proj", "down_proj"],
     router_conditioning="dual",                # "dual" = GaDRA | "mono" = GaDRA-Mono
     gate="hard",                               # "hard" = Gumbel-STE | "soft"

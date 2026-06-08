@@ -1,38 +1,23 @@
-# GaDRA paper-repro inference SUITE — set `adapter` ONCE, evaluate every task in `tasks` in a single job.
-# Mirrors the research repo's `task_types` list + per-task `configs/eval_config/*.json`. The model is loaded
-# ONCE and reused across all tasks; a score summary prints at the end.
-#   uv run python -m examples.inference --config examples/config/inference.yaml
-#   (SLURM: `sbatch examples/slurm/inference.slurm` — this file is the default CONFIG.)
+# GaDRA paper-repro inference suite (`python -m examples.inference --config <this>`).
+# Set `adapter` once; all tasks in `tasks` are evaluated in a single job, model loaded once.
 
 base: meta-llama/Llama-3.1-8B-Instruct
-adapter: out/gadra-bbc            # ← set ONCE; applied to every task below (e.g. save/BBC_news/<DATE>/CPT/GaDRA)
+adapter: out/gadra-bbc            # set once; applied to every task below
 
-# Which benchmarks to run this job (add/remove lines freely — this is the equivalent of `task_types`).
-# Each per-task config carries its own eval_file + the correct knobs (use_raw_text / chat_template /
-# max_new_tokens / GPT judge); open them to point eval_file (+ documents_file for bbcqa) at your data.
+# Benchmarks to run (add/remove freely). Each per-task config supplies eval_file + task knobs.
 tasks:
   - examples/config/inference_bbcqa.yaml   # BBC QA (target)    — GPT-judged; needs OPENAI_API_KEY + documents_file
   - examples/config/inference_gsm8k.yaml   # GSM8K  (retention) — EM
-  - examples/config/inference_mbpp.yaml    # MBPP   (retention) — pass@1 (runs model code in a sandbox)
+  - examples/config/inference_mbpp.yaml    # MBPP   (retention) — pass@1
   - examples/config/inference_tiebe.yaml   # TiEBe  (retention) — GPT-judged; needs OPENAI_API_KEY
 
-# GPT-judged tasks (bbcqa / tiebe) read OPENAI_API_KEY from the environment, never the repo:
-#   export OPENAI_API_KEY=sk-...        (sbatch forwards it to the job)
+# GPT-judged tasks (bbcqa / tiebe) read OPENAI_API_KEY from the environment, never the repo.
 
-# ── Single-task mode (alternative) ───────────────────────────────────────────────────────────────────
-# Delete the `tasks:` block above and set the fields directly here (task / eval_file / use_raw_text / ...),
-# or just point --config at one of the per-task files:
-#   uv run python -m examples.inference --config examples/config/inference_gsm8k.yaml
-# Footguns if you hand-roll a single-task config: BBC QA is `task: bbcqa` (GPT-judged, NOT char-F1 `qa`);
-# gsm8k/mbpp need `use_raw_text: true` (few-shot raw `text`) + `chat_template_path: null`; TiEBe
-# `max_new_tokens: 128`. Full mapping: examples/slurm/README.md -> "Per-task settings".
-
-# Eval JSONL — the paper's raw files (id + messages, or question + text) work directly:
-#   prompt    : explicit `prompt` (verbatim) > `text` (when use_raw_text) > `messages` (chat template) > `question`
-#   reference : `messages[-1]` (gold answer), or explicit `answer`/`answers`/`answer_list`
-#   qa    -> char-F1/EM vs the reference
-#   gsm8k -> EM vs `answers`/`answer` (a list, or a Python-repr stringified list — both handled)
-#   mbpp  -> `test` (test program; requires HF_ALLOW_CODE_EVAL=1, runs candidate code in a sandbox)
-#   bbcqa -> GPT judge vs the source article: question from `messages[-2]`, document from `documents_file`
-#            keyed by `id` (with the -QA / -1turnQA suffix stripped), or an explicit `document` field
-#   tiebe -> GPT judge vs the expected answer (`messages[-1]` or `answer`); question from `messages[-2]`
+# Eval JSONL field mapping:
+#   prompt    : explicit `prompt` > `text` (use_raw_text) > `messages` (chat template) > `question`
+#   reference : `messages[-1]`, or explicit `answer`/`answers`/`answer_list`
+#   qa    -> char-F1/EM
+#   gsm8k -> EM vs `answers`/`answer`
+#   mbpp  -> `test` field (requires HF_ALLOW_CODE_EVAL=1)
+#   bbcqa -> GPT judge; document from `documents_file` keyed by `id`, or explicit `document` field
+#   tiebe -> GPT judge; question from `messages[-2]`, answer from `messages[-1]` or `answer`

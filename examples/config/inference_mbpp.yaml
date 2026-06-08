@@ -1,18 +1,15 @@
-# MBPP (retention) — pass@1, deterministic / bit-exact. No key, but EXECUTES model-generated code
-# (HF_ALLOW_CODE_EVAL=1, set by the slurm script) — run only in an isolated/sandboxed environment.
-# Mirrors configs/eval_config/mbpp_llama.json: 3-shot, chat_template=null (the eval file's `text` field
-# holds the fully-formed 3-shot prompt), so use_raw_text MUST be true. Each row needs a `test` field.
-#   uv run python -m examples.inference --config examples/config/inference_mbpp.yaml
-# base + adapter come from the suite (examples/inference.yaml, set ONCE) or `--override adapter=...`.
-chat_template_path: null                        # null = no chat template (the 3-shot prompt is raw text)
+# MBPP (retention) — pass@1. No key; requires HF_ALLOW_CODE_EVAL=1 (set by inference.slurm).
+# use_raw_text MUST be true: the eval file's `text` field holds the pre-formatted 3-shot prompt.
+# base + adapter come from the suite (inference.yaml) or `--override adapter=...`.
+chat_template_path: null                        # null = no chat template (3-shot prompt is raw text)
 
 task: mbpp
-eval_file: data/MBPP/mbpp_llama_test.jsonl                 # original: datasets/MBPP/mbpp_llama_test.jsonl (3-shot `text` + `test`)
+eval_file: data/MBPP/mbpp_llama_test.jsonl
 use_raw_text: true                              # use the pre-formatted 3-shot `text` field verbatim
 batch_size: 32
 max_new_tokens: 256
 
-# code_eval (pass@1) knobs — match the research repo's configs/eval_config/mbpp_llama.json
+# code_eval (pass@1) knobs:
 code_eval_k: [1]
 code_eval_num_workers: 8
 code_eval_timeout: 30.0

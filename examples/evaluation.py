@@ -1,9 +1,4 @@
-"""Evaluation for GaDRA paper reproduction — answer parsers, deterministic scorers, greedy runner, PPL.
-
-Consolidated (and ported VERBATIM) from the research repo so the **deterministic** metrics in the paper's
-``distribution_stats`` reproduce bit-for-bit (golden-tested, gate G3): QA char-F1/EM, GSM8K exact-match,
-MBPP pass@1. The GPT-judged "Correct %" for BBC/TiEBe needs an external judge (OpenAI) and is deliberately
-NOT computed here — see ``docs/STANDALONE_PLAN.md`` §5.
+"""Evaluation for GaDRA — answer parsers, deterministic scorers, greedy runner, PPL, GPT judge.
 
 Five concerns, one module:
   * parsers  — :func:`normalize_answer`, :func:`normalize_numeric_answer`, :func:`llama_gsm8k_parse`,
@@ -11,11 +6,7 @@ Five concerns, one module:
   * scorers  — :func:`compute_qa_metrics`, :func:`compute_qa_metrics_answer_list`, :func:`compute_gsm8k_metrics`
   * runner   — :func:`get_generation_params`, :func:`generate_greedy`, :func:`sequence_perplexity` (need a model/GPU)
   * code     — :func:`compute_pass_at_k` (MBPP/HumanEval pass@k via ``evaluate('code_eval')``, opt-in)
-  * judge    — :class:`GPTJudge` (BBC-QA / TiEBe "Correct %" via OpenAI; key from ``OPENAI_API_KEY``, NOT bit-exact)
-
-The parsers + scorers are pure CPU functions. The runner + ``compute_pass_at_k`` need a model / the
-``evaluate`` library; :class:`GPTJudge` needs ``openai`` + a key (lazy-imported). All are exercised at the
-HITL gate (P6.5), not in CPU unit tests.
+  * judge    — :class:`GPTJudge` (BBC-QA / TiEBe "Correct %" via OpenAI; key from ``OPENAI_API_KEY``)
 """
 
 from __future__ import annotations
@@ -30,15 +21,12 @@ import torch
 
 
 # --------------------------------------------------------------------------------------------------
-# Answer parsers / normalizers (verbatim — any change shifts the reproduced numbers)
-#   normalize_answer         <- inference_common.normalize_answer
-#   normalize_numeric_answer <- evaluate_gsm8k.normalize_numeric_answer
-#   llama_*                  <- utils
+# Answer parsers / normalizers
 # --------------------------------------------------------------------------------------------------
 def normalize_answer(text: str, strip_articles: bool = False) -> str:
-    """Lowercase, drop punctuation, collapse whitespace (verbatim ``inference_common.normalize_answer``).
+    """Lowercase, drop punctuation, collapse whitespace.
 
-    ``strip_articles=True`` additionally removes leading a/an/the to match lm-eval-harness NQ-open.
+    ``strip_articles=True`` additionally removes leading a/an/the (lm-eval-harness NQ-open).
     """
     text = text.lower()
     if strip_articles:
@@ -48,7 +36,7 @@ def normalize_answer(text: str, strip_articles: bool = False) -> str:
 
 
 def normalize_numeric_answer(s: str) -> str:
-    """Normalize a numeric answer — strip currency/commas/space, canonicalize int vs float (verbatim)."""
+    """Normalize a numeric answer — strip currency/commas/space, canonicalize int vs float."""
     if not s:
         return ""
     s = re.sub(r"[\$€£¥\s,]", "", s.strip()).rstrip(".")
@@ -60,7 +48,7 @@ def normalize_numeric_answer(s: str) -> str:
 
 
 def llama_gsm8k_parse(text: str) -> str:
-    """Extract the final numeric answer from a Llama GSM8K generation (verbatim ``utils.llama_gsm8k_parse``)."""
+    """Extract the final numeric answer from a Llama GSM8K generation."""
     text = text.lower()
     t = text.strip()
 
@@ -80,7 +68,7 @@ def llama_gsm8k_parse(text: str) -> str:
 
 
 def extract_gsm8k(text: Optional[str]) -> str:
-    """Extract the numeric answer after the final ``####`` (verbatim ``utils.extract_gsm8k``)."""
+    """Extract the numeric answer after the final ``####``."""
     if not text:
         return ""
 
@@ -96,7 +84,7 @@ def extract_gsm8k(text: Optional[str]) -> str:
 
 
 def llama_mbpp_parse(text: str) -> str:
-    """Extract the python code block from a Llama MBPP generation (verbatim ``utils.llama_mbpp_parse``)."""
+    """Extract the python code block from a Llama MBPP generation."""
     BLOCK_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.S | re.I)
     SPECIAL_TOKEN_RE = re.compile(r"<\|.*?\|>")
     s = text.replace("\r\n", "\n")
@@ -112,7 +100,7 @@ def llama_mbpp_parse(text: str) -> str:
 
 
 def llama_humaneval_reconstruct(prediction: str, prompt: str) -> str:
-    """Reconstruct a full function from prompt preamble + generated body (verbatim ``utils``).
+    """Reconstruct a full function from the prompt preamble + generated body.
 
     Meta's Llama HumanEval format puts the signature + docstring in the assistant preamble (an unclosed
     ```python block); the model generates only the body. This prepends the preamble to the body.
@@ -139,10 +127,10 @@ def llama_humaneval_reconstruct(prediction: str, prompt: str) -> str:
 
 
 # --------------------------------------------------------------------------------------------------
-# Deterministic scorers (verbatim ``evaluate_document_qa.compute_metrics`` + ``evaluate_gsm8k``)
+# Deterministic scorers
 # --------------------------------------------------------------------------------------------------
 def compute_qa_metrics(prediction: str, reference: str) -> Dict[str, float]:
-    """Char-level F1 + EM in ``[0, 100]`` (verbatim ``evaluate_document_qa.compute_metrics``)."""
+    """Char-level F1 + EM in ``[0, 100]``."""
     pred_chars = list(normalize_answer(prediction))
     ref_chars = list(normalize_answer(reference))
     if not pred_chars or not ref_chars:
@@ -165,9 +153,7 @@ def compute_qa_metrics_answer_list(prediction: str, references: List[str]) -> Di
 
 def compute_gsm8k_metrics(prediction: str, answers: List[str]) -> Dict[str, Any]:
     """GSM8K exact-match: parse the final answer (``llama_gsm8k_parse``) then RAW string membership in the
-    gold ``answers`` — verbatim ``inference_common.GSM8KEvaluator`` (which does NOT numeric-normalize: its
-    normalize lines are commented out). Matching it exactly is required to reproduce the paper's EM; numeric
-    normalization (strip commas / trailing dot) would be more lenient and inflate the score."""
+    gold ``answers`` (no numeric normalization)."""
     parsed = llama_gsm8k_parse(prediction or "")
     gold = [str(a) for a in answers if a]
     is_correct = bool(parsed) and parsed in gold
@@ -180,18 +166,14 @@ def compute_gsm8k_metrics(prediction: str, answers: List[str]) -> Dict[str, Any]
 
 
 # --------------------------------------------------------------------------------------------------
-# Greedy generation + perplexity (verbatim ``inference_common.get_generation_params``; need a model/GPU)
+# Greedy generation + perplexity (need a model/GPU)
 # --------------------------------------------------------------------------------------------------
 def get_generation_params(tokenizer: Any, max_new_tokens: int, *, cache_implementation: Optional[str] = None) -> Dict[str, Any]:
-    """Deterministic greedy params + robust multi-family EOS-id set.
+    """Deterministic greedy params + multi-family EOS-id set.
 
     The EOS-id list always contains the tokenizer's ``eos_token_id`` plus any of ``{<|eot_id|>, <|im_end|>}``
-    that resolve to a real vocab id (Llama-3 has ``<|eot_id|>``; Qwen3 has ``<|im_end|>``), never ``None``.
-
-    KV-cache: greedy decoding is identical regardless of cache implementation, so this is a pure SPEED knob.
-    Default (``None``) uses transformers' dynamic cache, which is fast WITHOUT ``torch.compile``. The research
-    repo passed ``cache_implementation="static"`` (+ ``disable_compile``) — but static-cache-without-compile
-    pre-allocates to the full length and is markedly SLOWER here, so it is opt-in via the eval config.
+    that resolve to a real vocab id (Llama-3 has ``<|eot_id|>``; Qwen3 has ``<|im_end|>``).
+    ``cache_implementation`` is a speed knob; default (``None``) uses transformers' dynamic cache.
     """
     eos_ids = [tokenizer.eos_token_id]
     unk_id = getattr(tokenizer, "unk_token_id", None)
@@ -208,7 +190,7 @@ def get_generation_params(tokenizer: Any, max_new_tokens: int, *, cache_implemen
         "pad_token_id": tokenizer.eos_token_id,
         "eos_token_id": eos_ids,
     }
-    if cache_implementation:  # opt-in verbatim research-repo behavior (slower without compile)
+    if cache_implementation:  # opt-in (slower without compile)
         params["cache_implementation"] = cache_implementation
         params["disable_compile"] = True
     return params
@@ -249,7 +231,7 @@ def sequence_perplexity(model, input_ids, *, attention_mask: Optional[Any] = Non
 
 
 # --------------------------------------------------------------------------------------------------
-# MBPP / HumanEval pass@k (delegated to the sandboxed ``evaluate('code_eval')``; explicit opt-in)
+# MBPP / HumanEval pass@k (via ``evaluate('code_eval')``; explicit opt-in)
 # --------------------------------------------------------------------------------------------------
 def compute_pass_at_k(
     predictions: Sequence[str],
@@ -261,21 +243,17 @@ def compute_pass_at_k(
     extract: bool = True,
     return_passed: bool = False,
 ) -> Dict[str, float] | Tuple[Dict[str, float], List[bool]]:
-    """pass@k with one candidate per problem (the GaDRA paper's MBPP/HumanEval setting).
+    """pass@k with one candidate per problem (MBPP/HumanEval).
 
-    Code execution is a security-sensitive, already-solved problem — we delegate to the sandboxed
-    ``evaluate('code_eval')`` rather than hand-roll a runner. Candidate code is extracted from Llama
-    generations via :func:`llama_mbpp_parse`. Requires the reproduction deps (``evaluate``) and the
-    explicit opt-in ``HF_ALLOW_CODE_EVAL=1`` (running model-generated code executes arbitrary Python —
-    do so only in a sandbox).
+    Delegates code execution to ``evaluate('code_eval')``. Candidate code is extracted from Llama
+    generations via :func:`llama_mbpp_parse`. SECURITY: requires the explicit opt-in
+    ``HF_ALLOW_CODE_EVAL=1`` and runs model-generated (untrusted) Python — run only in a sandbox.
 
     Args:
         predictions: model generation for each problem (code extracted via ``llama_mbpp_parse`` when ``extract``).
         test_cases:  the test program (asserts) appended after the candidate for each problem.
         k:           pass@k values (default ``[1]``).
-        return_passed: also return a per-sample ``passed`` list (ordered by sample), mirroring
-                       ``inference_common.CodeEvaluator._process_code_eval_results`` — needed to write the
-                       research repo's per-sample ``inference_result.json`` (``passed`` field) + ``code_eval_stats``.
+        return_passed: also return a per-sample ``passed`` list (ordered by sample).
     """
     if os.environ.get("HF_ALLOW_CODE_EVAL") != "1":
         raise RuntimeError(
@@ -294,13 +272,12 @@ def compute_pass_at_k(
     results, raw = code_eval.compute(
         predictions=candidates, references=references, k=k, num_workers=num_workers, timeout=timeout
     )
-    # Cast to plain Python float — code_eval returns numpy floats, which the json.dump in the result writer
-    # (no numpy encoder) cannot serialize; the research repo also stores a plain float (e.g. 0.506).
+    # Cast to plain Python float — code_eval returns numpy floats, which json.dump cannot serialize.
     metrics = {f"pass@{kk}": float(results[f"pass@{kk}"]) for kk in k}
     if not return_passed:
         return metrics
-    # Per-sample passed, ordered by task_id (= sample index) — verbatim CodeEvaluator._process_code_eval_results:
-    # raw is {ref_idx: [(pred_idx, result_dict), ...]}; a sample passes if ANY candidate passed.
+    # Per-sample passed, ordered by task_id (= sample index); a sample passes if any candidate passed.
+    # raw is {ref_idx: [(pred_idx, result_dict), ...]}.
     by_task: List[Tuple[int, bool]] = []
     for sample_results in raw.values():
         passed = any(res.get("passed", False) for _, res in sample_results)
@@ -311,15 +288,10 @@ def compute_pass_at_k(
 
 
 # --------------------------------------------------------------------------------------------------
-# lm-evaluation-harness adapter — FUTURE stub (paper_repro is the supported path)
+# lm-evaluation-harness adapter — future stub
 # --------------------------------------------------------------------------------------------------
 def register_lm_eval_model() -> None:
-    """Register a ``gadra`` model type with lm-evaluation-harness (future).
-
-    Intended implementation: subclass ``lm_eval.models.huggingface.HFLM`` so its ``_create_model`` wraps the
-    loaded base with ``PeftModel.from_pretrained`` (GaDRA is non-mergeable — the gate stays attached), then
-    call ``lm_eval.api.registry.register_model('gadra')(GaDRAHFLM)``. Deferred per the standalone plan.
-    """
+    """Register a ``gadra`` model type with lm-evaluation-harness (future stub, not implemented)."""
     raise NotImplementedError(
         "examples.evaluation.register_lm_eval_model is a future stub; the supported eval path is the "
         "paper_repro scorers in this module. lm-eval integration is deferred — see docs/STANDALONE_PLAN.md."
@@ -327,14 +299,11 @@ def register_lm_eval_model() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# GPT-as-judge — BBC-QA / TiEBe "Correct %" (verbatim ``inference_common.GPTEvaluator``)
+# GPT-as-judge — BBC-QA / TiEBe "Correct %"
 #
-# Unlike the deterministic scorers above, this metric calls OpenAI, so it is NOT bit-exact (it depends on
-# the served model version) — only method-equivalent. The API key is read from ``OPENAI_API_KEY`` (never
-# stored in the repo); ``openai`` is imported lazily, so this section costs nothing unless a GPT-judged task
-# (``bbcqa`` / ``tiebe``) is actually run.
+# This metric calls OpenAI. The API key is read from ``OPENAI_API_KEY``; ``openai`` is imported lazily.
 # --------------------------------------------------------------------------------------------------
-# Language-specific judge prompts + labels — VERBATIM from inference_common.GPTEvaluator.PROMPTS.
+# Language-specific judge prompts + labels.
 _JUDGE_PROMPTS = {
     "zh": {
         "system": (
@@ -376,7 +345,7 @@ _JUDGE_PROMPTS = {
 
 
 class GPTJudge:
-    """GPT answer-correctness judge (verbatim protocol). Key from ``OPENAI_API_KEY`` (never stored).
+    """GPT answer-correctness judge. Key from ``OPENAI_API_KEY``.
 
     ``language``: ``"en"`` for BBC-QA (judges the answer against the source document), ``"tiebe"`` for TiEBe
     (judges against the expected answer), ``"zh"`` for the Chinese document-QA variant.
@@ -410,9 +379,7 @@ class GPTJudge:
         self.user_template = cfg["user_template"]
         self.correct_label = cfg["correct"]
         self.incorrect_label = cfg["incorrect"]
-        # Bounded retries + a per-request timeout so a degraded/offline network surfaces quickly instead of
-        # hanging on the SDK's default (600s timeout, long backoff). Inference also runs a fast reachability
-        # preflight before this point, so this is a second line of defense.
+        # Bounded retries + per-request timeout (instead of the SDK's 600s default).
         self._client = openai.OpenAI(api_key=api_key, max_retries=2, timeout=60.0)
 
     def evaluate_single(self, document: str, question: str, answer: str) -> str:
@@ -428,10 +395,8 @@ class GPTJudge:
         return self.incorrect_label
 
     def evaluate_detailed(self, document: str, question: str, answer: str) -> Dict[str, Any]:
-        """Full per-sample judge record (verbatim ``GPTEvaluator.evaluate_multiple_times`` -> the
-        ``gpt_evaluation`` dict the research repo saves into ``inference_result.json``): the majority-vote
-        ``final_decision`` plus the raw per-repeat verdicts and vote counts. ``all_results`` mirrors the
-        parent's saved key name (its in-memory key is ``results``)."""
+        """Full per-sample judge record: the majority-vote ``final_decision`` plus the raw per-repeat
+        verdicts and vote counts."""
         results: List[str] = []
         for _ in range(self.evaluation_repeats):
             try:
@@ -463,6 +428,6 @@ class GPTJudge:
         for idx, it in enumerate(items, 1):
             if self.evaluate(it["document"], it["question"], it["answer"]) == self.correct_label:
                 n_correct += 1
-            if idx % 25 == 0 or idx == total:  # flushed progress so the judge phase isn't a silent black box
+            if idx % 25 == 0 or idx == total:
                 print(f"[judge] {idx}/{total} ({self.model})", flush=True)
         return n_correct / total * 100

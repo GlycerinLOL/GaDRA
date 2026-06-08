@@ -1,9 +1,4 @@
-"""G3 — scorer parity: ``examples.evaluation`` reproduces the research repo's deterministic scorers.
-
-The golden (``examples/tests/_golden/eval_golden.pt``) is captured by ``capture_eval_golden.py`` from the parent
-scorers on a diverse case set (exact/partial/empty QA, currency/comma/negative/float GSM8K, fenced/special-
-token MBPP code). Hermetic — no model, tokenizer, or source repo needed at test time.
-"""
+"""Scorer parity: ``examples.evaluation`` reproduces the research repo's deterministic scorers."""
 
 import pathlib
 
@@ -56,17 +51,14 @@ def test_normalizers_match_golden(golden):
         assert normalize_numeric_answer(c["s"]) == c["numeric"], f"normalize_numeric mismatch for {c['s']!r}"
 
 
-# Source-independent invariants (do not rely on the golden being present).
 def test_qa_exact_match_is_100():
     out = compute_qa_metrics("Paris", "paris")
     assert out["em"] == 100.0 and out["f1"] == 100.0
 
 
 def test_gsm8k_raw_membership_no_normalization():
-    # The inference path (inference_common.GSM8KEvaluator) scores by RAW string membership — its
-    # numeric-normalize lines are commented out, so this reproduces the paper's GSM8K EM verbatim.
+    # Scores by raw string membership (no normalization), matching the inference-path scorer.
     exact = compute_gsm8k_metrics("The final answer is 42", ["42"])
     assert exact["is_correct"] and exact["em"] == 100.0
-    # Currency/comma forms only match AFTER normalization; the raw scorer deliberately does NOT credit them.
     strict = compute_gsm8k_metrics("The final answer is $1,234", ["1234"])
     assert not strict["is_correct"] and strict["em"] == 0.0

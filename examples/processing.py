@@ -1,24 +1,9 @@
 """Data processing for GaDRA continual pre-training — tokenizer build, EOS handling, FA2 packing.
 
-Consolidated (and ported VERBATIM) from the research repo's ``Preprocessing.py`` + ``utils.py`` +
-``inference_common.build_tokenizer`` so the packed token stream matches the paper's CPT bit-for-bit
-(golden-tested, gate G2). No dependency on the research package (only ``transformers`` / ``torch``).
-
 Three concerns, one module:
   * tokenizer build  — :func:`get_tokenizer_for_preprocess`, :func:`build_tokenizer`, :func:`load_chat_template`
   * EOS handling     — :func:`ensure_eos`, :func:`check_tokenizer_auto_adds_eos`, :func:`get_first_sample_text`
   * packing          — :func:`tokenize_pt`, :func:`group_texts`, :class:`PackingCollator`, :func:`pack_text_dataset`
-
-Quickstart (mirrors ``examples/train.py``)::
-
-    from datasets import load_dataset
-    from examples.processing import get_tokenizer_for_preprocess, pack_text_dataset, PackingCollator
-
-    tok = get_tokenizer_for_preprocess("meta-llama/Llama-3.1-8B-Instruct",
-                                       chat_template_path="...jinja", truncation_side="right", padding_side="right")
-    ds = load_dataset("json", data_files={"train": "corpus.jsonl"})["train"]
-    tokenized = pack_text_dataset(ds, tok, max_length=1024, strategy="fa2_collator")
-    collator = PackingCollator()        # call collator.check_model(model) once (requires FA2)
 """
 
 from __future__ import annotations
@@ -35,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------------------------------
-# Tokenizer build (verbatim ``inference_common.build_tokenizer`` + ``utils.get_tokenizer_for_preprocess``)
+# Tokenizer build
 # --------------------------------------------------------------------------------------------------
 def load_chat_template(chat_template_path: Optional[str | Path]) -> Optional[str]:
-    """Read a Jinja chat-template file (verbatim ``utils.get_chat_template``)."""
+    """Read a Jinja chat-template file."""
     if chat_template_path is None:
         return None
     path = Path(chat_template_path)
@@ -61,8 +46,8 @@ def build_tokenizer(
 ):
     """Create a tokenizer with shared defaults plus optional chat-template injection.
 
-    Verbatim port of ``inference_common.build_tokenizer`` — pad_token defaults to EOS, sides are applied,
-    and a chat template (string or file path) is attached when given.
+    pad_token defaults to EOS, padding/truncation sides are applied, and a chat template (string or file
+    path) is attached when given.
     """
     pretrained_kwargs = dict(auto_tokenizer_kwargs)
     if cache_dir is not None:
@@ -98,8 +83,8 @@ def get_tokenizer_for_preprocess(
 ):
     """Build a tokenizer with the project's preprocessing defaults.
 
-    Verbatim port of ``utils.get_tokenizer_for_preprocess``: ``add_bos_token=True``, ``add_eos_token=True``,
-    plus the optional chat template and padding/truncation sides.
+    Sets ``add_bos_token=True``, ``add_eos_token=True``, plus the optional chat template and
+    padding/truncation sides.
     """
     return build_tokenizer(
         tokenizer_path=model_name_or_path,
@@ -112,10 +97,10 @@ def get_tokenizer_for_preprocess(
 
 
 # --------------------------------------------------------------------------------------------------
-# EOS handling (verbatim ``Preprocessor._ensure_eos`` + ``utils.check_tokenizer_auto_adds_eos`` / ``get_first_sample_text``)
+# EOS handling
 # --------------------------------------------------------------------------------------------------
 def ensure_eos(texts, eos_token):
-    """Append ``eos_token`` to each sample if it is missing (verbatim ``Preprocessor._ensure_eos``)."""
+    """Append ``eos_token`` to each sample if it is missing."""
     if eos_token is None:
         return texts
 
@@ -130,8 +115,7 @@ def ensure_eos(texts, eos_token):
 def check_tokenizer_auto_adds_eos(tokenizer, test_text: str = "Hello world!") -> bool:
     """Return ``True`` if the tokenizer appends EOS under ``add_special_tokens=True``.
 
-    Verbatim port of ``utils.check_tokenizer_auto_adds_eos``. Drives the manual-EOS branch in
-    :func:`tokenize_pt`: Llama-3.1 returns ``False`` (no auto-EOS) -> EOS appended.
+    Drives the manual-EOS branch in :func:`tokenize_pt`: Llama-3.1 returns ``False`` (no auto-EOS).
     """
     eos_token_id = getattr(tokenizer, "eos_token_id", None)
     if eos_token_id is None:
@@ -144,7 +128,7 @@ def check_tokenizer_auto_adds_eos(tokenizer, test_text: str = "Hello world!") ->
 
 
 def get_first_sample_text(dataset: Sequence[dict[str, Any]]) -> str:
-    """Extract the first sample's text to probe EOS behavior (verbatim ``utils.get_first_sample_text``)."""
+    """Extract the first sample's text to probe EOS behavior."""
     if len(dataset) == 0:
         logger.warning("Dataset is empty, using default text.")
         return "Hello world!"
@@ -167,21 +151,19 @@ def get_first_sample_text(dataset: Sequence[dict[str, Any]]) -> str:
 
 
 # --------------------------------------------------------------------------------------------------
-# PT tokenization + packing (verbatim ``Preprocessor.tokenize_function_pt`` packing branch,
-# ``grouping_concate_all``, ``PackingCollator``)
+# PT tokenization + packing
 # --------------------------------------------------------------------------------------------------
 def tokenize_pt(examples, tokenizer, *, max_length: int, auto_add_eos: bool, column_name: str = "text"):
-    """PT/packing tokenize — verbatim ``Preprocessor.tokenize_function_pt`` (packing strategy).
+    """PT/packing tokenize.
 
-    EOS polarity (the footgun): when the tokenizer does NOT auto-append EOS (``auto_add_eos=False``, e.g.
-    Llama-3.1), EOS is appended manually here; when it does, it is left to the tokenizer. Returns a dict
-    with ``input_ids`` and ``labels`` (a copy of ``input_ids``).
+    When the tokenizer does NOT auto-append EOS (``auto_add_eos=False``, e.g. Llama-3.1), EOS is appended
+    manually here; when it does, it is left to the tokenizer. Returns a dict with ``input_ids`` and
+    ``labels`` (a copy of ``input_ids``).
     """
     texts = examples[column_name]
     eos_token = getattr(tokenizer, "eos_token", None)
 
     if not auto_add_eos and eos_token is not None:
-        # Maintain historical behavior: add EOS even when the tokenizer does not.
         texts = ensure_eos(texts, eos_token)
 
     inputs = tokenizer(text=texts, add_special_tokens=True, truncation=True, max_length=max_length)
@@ -190,7 +172,7 @@ def tokenize_pt(examples, tokenizer, *, max_length: int, auto_add_eos: bool, col
 
 
 def group_texts(examples, block_size: int):
-    """Concatenate then chunk into ``block_size`` blocks — verbatim ``Preprocessor.grouping_concate_all``."""
+    """Concatenate then chunk into ``block_size`` blocks."""
     keys = set(["input_ids", "labels", "attention_mask", "token_ppl"]).intersection(examples.keys())
     concatenated_examples = {k: list(chain(*examples[k])) for k in keys}
 
@@ -209,13 +191,10 @@ def group_texts(examples, block_size: int):
 class PackingCollator:
     """Flatten a batch of variable-length samples into one packed sequence (``batch_size=1``).
 
-    Verbatim port of the research repo's ``Preprocessing.PackingCollator``. ``position_ids`` reset at each
-    document boundary so Flash-Attention-2's varlen path (``_prepare_flash_attention_from_position_ids``)
-    computes ``cu_seqlens`` and applies per-document causal attention. ``attention_mask`` is OMITTED — FA2
-    requires it to be ``None`` to enter the ``position_ids`` varlen branch.
-
-    Safety: under SDPA/eager the missing mask silently degrades to full causal attention *across*
-    documents (cross-contamination, wrong numbers, no error). :meth:`check_model` hard-asserts FA2.
+    ``position_ids`` reset at each document boundary so Flash-Attention-2's varlen path computes
+    ``cu_seqlens`` and applies per-document causal attention. ``attention_mask`` is omitted — FA2 requires
+    it to be ``None`` to enter the ``position_ids`` varlen branch; under SDPA/eager the missing mask
+    silently degrades to full causal attention across documents, so :meth:`check_model` hard-asserts FA2.
     """
 
     def __init__(self, *, assert_flash_attention: bool = True):
@@ -269,8 +248,7 @@ def pack_text_dataset(
     * ``strategy='group'``: additionally concatenate + chunk into ``block_size`` (default ``max_length``)
       blocks (standard run_clm); use a plain default collator at train time.
 
-    ``auto_add_eos``: if ``None``, auto-detected via :func:`check_tokenizer_auto_adds_eos` on the first
-    sample (mirrors the paper's ``train_gadra_cpt.py``).
+    ``auto_add_eos``: if ``None``, auto-detected via :func:`check_tokenizer_auto_adds_eos` on the first sample.
     """
     if auto_add_eos is None:
         auto_add_eos = check_tokenizer_auto_adds_eos(tokenizer, get_first_sample_text(dataset))

@@ -1,20 +1,16 @@
-# BBC-QA (the paper's TARGET benchmark, Δtgt) — GPT-judged "Correct %".
-# Mirrors the research repo's `document_qa` task (configs/eval_config/bbcqa.json), which uses
-# use_gpt_evaluation=true — this is NOT char-F1/EM. Needs OPENAI_API_KEY in the environment.
-#   uv run python -m examples.inference --config examples/config/inference_bbcqa.yaml
-# base + adapter are NOT set here — they come from the suite (examples/inference.yaml, set ONCE) or, for a
-# standalone single-task run, from `--override adapter=...` (base defaults to Llama-3.1-8B-Instruct).
+# BBC-QA (target benchmark) — GPT-judged "Correct %" (`python -m examples.inference --config <this>`).
+# base + adapter come from the suite (inference.yaml) or `--override adapter=...`.
 chat_template_path: examples/config/llama3.2-Instruct.jinja
 
 task: bbcqa
-eval_file: data/BBC_news_alltime/Finetuning/v2-subset_5587/v2_5587-test400.jsonl                # original: datasets/BBC_news_alltime/Finetuning/v2-subset_5587/v2_5587-test400.jsonl
-documents_file: data/BBC_news_alltime/Pretraining/handwritten_5587.jsonl      # judge's source articles; original: datasets/BBC_news_alltime/Pretraining/handwritten_5587.jsonl
-use_raw_text: false                             # prompt built from `messages` via the chat template
+eval_file: data/BBC_news_alltime/Finetuning/v2-subset_5587/v2_5587-test400.jsonl
+documents_file: data/BBC_news_alltime/Pretraining/handwritten_5587.jsonl      # source articles for the GPT judge
+use_raw_text: false                             # prompt built from `messages` via chat template
 batch_size: 32
 max_new_tokens: 256
 
-# GPT judge (key from the OPENAI_API_KEY env var, never the repo):
+# GPT judge (key from OPENAI_API_KEY env var):
 gpt_model: gpt-4.1-mini
 gpt_repeats: 1
 gpt_vote_rate: 50
-gpt_workers: 32                                 # parallel judge calls (research-repo default); overlaps generation
+gpt_workers: 32                                 # parallel judge calls

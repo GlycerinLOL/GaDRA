@@ -1,19 +1,7 @@
 """LoRA baseline entry — DEPRECATED shim. The LoRA baseline is now ``method: lora`` in the run-config.
 
-The training entry is unified: ``examples/train.py`` selects the adapter from the run-config's
-``method:`` field (gadra | gadra-mono | gadra-soft | lora), dispatched by ``examples/methods.py``.
-This file is kept only so existing invocations and SLURM file-path wrappers keep working::
-
-    python -m examples.train_lora_baseline --config examples/config/train_lora.yaml
-
-It forces ``--override method=lora`` (unless the argv already sets ``method``) and delegates to the
-single entry, so there is exactly ONE trainer code path and the LoRA baseline can never drift from
-the GaDRA recipe again. Prefer the unified form directly::
-
-    python -m examples.train --config examples/config/train_lora.yaml
-    python -m examples.train --config examples/config/train.yaml --override method=lora
-
-Will be removed in a future release.
+Forces ``--override method=lora`` (unless the argv already sets ``method``) and delegates to
+``examples/train.py``. Will be removed in a future release.
 """
 
 from __future__ import annotations
@@ -22,7 +10,7 @@ import pathlib
 import sys
 import warnings
 
-# Repo-only tooling: support both ``python -m examples.train_lora_baseline`` and the file-path form.
+# Support both ``python -m examples.train_lora_baseline`` and the file-path form.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 
@@ -35,8 +23,7 @@ def main() -> None:
     )
     from examples.train import main as _train_main
 
-    # Force method=lora unless the argv already pins method (so train_lora.yaml works whether or not
-    # it carries the `method:` line). Appended last, so it wins over any earlier --override method=X.
+    # Force method=lora unless the argv already pins method. Appended last, so it wins over any earlier --override method=X.
     already_sets_method = any(
         arg == "method" or arg.startswith("method=")
         for i, tok in enumerate(sys.argv)

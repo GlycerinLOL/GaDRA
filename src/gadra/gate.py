@@ -1,18 +1,12 @@
-"""Gate functions for GaDRA (method-critical).
+"""Gate functions for GaDRA.
 
-``gumbel_sigmoid`` is copied verbatim from the research repo's ``peft_losses.gumbel_sigmoid`` — it is
-the Gumbel-sigmoid straight-through estimator that produces the binary hard gate during training.
-``compute_gamma`` reproduces the released ``PeftBlock._gate_output_fn_forward`` decision for the two
-shipped gate types:
+``compute_gamma`` produces the per-token gate value for the two gate types:
 
-* **hard** (``gamma_hard_masking="Gumbel"`` in the legacy config): training draws a Gumbel-STE
-  binary sample; inference is the deterministic threshold ``1[sigmoid(z) > threshold]``.
-* **soft** (legacy ``gamma_hard_masking=None``): continuous ``softplus(z)`` — NOTE this is the
-  released code path that produced the paper's soft-gate numbers; the paper text describes a
-  ``sigmoid`` in ``[0,1]``. We replicate the code-as-run softplus and document the discrepancy.
+* **hard**: training draws a Gumbel-sigmoid STE binary sample; inference is the deterministic
+  threshold ``1[sigmoid(z) > threshold]``.
+* **soft**: continuous ``softplus(z)``.
 
-The residual scale ``alpha`` (the released ``output_scalar``) is applied to ``delta`` in the layer,
-not here, so these functions return the raw per-token gate value.
+The residual scaling ``lora_alpha / r`` is applied to ``delta`` in the layer, not here.
 """
 
 from __future__ import annotations
@@ -28,7 +22,7 @@ def gumbel_sigmoid(
     eps: float = 1e-10,
     threshold: float = 0.5,
 ) -> torch.Tensor:
-    """Gumbel-Sigmoid sampling for differentiable binary decisions (verbatim from peft_losses)."""
+    """Gumbel-sigmoid sampling for differentiable binary decisions."""
     if tau <= 0:
         raise ValueError(f"tau must be > 0, got: {tau}")
 
@@ -54,7 +48,7 @@ def compute_gamma(
     """Per-token gate value gamma from gate logits ``z``.
 
     hard: train -> Gumbel-STE binary sample; eval -> deterministic ``1[sigmoid(z) > threshold]``.
-    soft: ``softplus(z)`` (code-as-run; see module docstring).
+    soft: ``softplus(z)``.
     """
     if gate == "soft":
         return F.softplus(z)

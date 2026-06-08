@@ -1,12 +1,10 @@
-# GSM8K (retention) — exact-match, deterministic / bit-exact. No key.
-# Mirrors configs/eval_config/gsm8k.json: 8-shot, chat_template=null (the eval file's `text` field already
-# holds the fully-formed 8-shot prompt), so use_raw_text MUST be true (else it degrades to 0-shot chat).
-#   uv run python -m examples.inference --config examples/config/inference_gsm8k.yaml
-# base + adapter come from the suite (examples/inference.yaml, set ONCE) or `--override adapter=...`.
-chat_template_path: null                        # null = no chat template (the 8-shot prompt is raw text)
+# GSM8K (retention) — exact-match. No key (`python -m examples.inference --config <this>`).
+# use_raw_text MUST be true: the eval file's `text` field holds the pre-formatted 8-shot prompt.
+# base + adapter come from the suite (inference.yaml) or `--override adapter=...`.
+chat_template_path: null                        # null = no chat template (8-shot prompt is raw text)
 
 task: gsm8k
-eval_file: data/GSM8K/gsm8k_llama_test.jsonl                # original: datasets/GSM8K/gsm8k_llama_test.jsonl (8-shot `text` + `answer`/`answers`)
+eval_file: data/GSM8K/gsm8k_llama_test.jsonl
 use_raw_text: true                              # use the pre-formatted 8-shot `text` field verbatim
 batch_size: 32
 max_new_tokens: 256

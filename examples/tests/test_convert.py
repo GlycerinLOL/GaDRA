@@ -1,10 +1,4 @@
-"""P3 gate — legacy -> peft-native checkpoint conversion.
-
-Builds a REAL legacy checkpoint with the research repo's original ``PeftPatcher`` (imported from the
-source repo), converts it, loads the result through the standard ``PeftModel.from_pretrained``, and
-asserts every adapter weight transferred bit-for-bit (direct param equality — independent of any
-model forward). Also checks bijection, config mapping, and out-of-scope rejection.
-"""
+"""Legacy to peft-native checkpoint conversion: weight transfer, config mapping, and scope rejection."""
 
 from __future__ import annotations
 
@@ -51,7 +45,7 @@ def _to_model_param_name(saved_key: str) -> str:
 
 
 def _build_legacy_checkpoint(out_dir: Path, freeze: bool = True):
-    """Patch a tiny model with the ORIGINAL implementation and save a legacy checkpoint."""
+    """Patch a tiny model with the original implementation and save a legacy checkpoint."""
     try:
         from peft_config import ModulePeftConfig, PeftConfig as LegacyPeftConfig
         from peft_module import PeftPatcher
@@ -74,13 +68,9 @@ def _build_legacy_checkpoint(out_dir: Path, freeze: bool = True):
     patcher = PeftPatcher(base, legacy_cfg)
     model_old = patcher.patch_model_with_peft()
 
-    # Real GaDRA training freezes the base and trains only the adapters, so the saved checkpoint
-    # contains only peft params. Mirror that here (freeze=False keeps base params trainable to
-    # exercise the converter's extra-trainable guard).
     for n, p in model_old.named_parameters():
         p.requires_grad_(("peft_blocks" in n) or (not freeze))
 
-    # Make every adapter param distinct & non-zero so the equality check is meaningful.
     from peft_model import PeftBlock
 
     gen = torch.Generator().manual_seed(123)
@@ -101,20 +91,18 @@ def test_convert_transfers_every_weight_and_loads_via_peft(tmp_path):
     out_dir = tmp_path / "new"
     manifest = convert_checkpoint(tmp_path / "old", out_dir)
 
-    # 3 projections x 2 layers x {A.weight, B.weight, gate.weight, gate.bias} = 24 params.
     assert manifest["num_params"] == len(old_state) == 24
     assert manifest["config"] == {
         "r": 8,
         "router_conditioning": "dual",
         "gate": "hard",
-        "lora_alpha": 1.0,
+        "lora_alpha": 8.0,  # alpha/r = 1.0
         "lora_dropout": 0.05,
         "target_modules": ["up_proj", "down_proj", "gate_proj"],
     }
     saved = json.loads((out_dir / "adapter_config.json").read_text())
     assert saved["peft_type"] == "GADRA"
 
-    # Load through the real peft API and verify every weight transferred exactly.
     from peft import PeftModel
 
     base2, _ = _tiny_llama()
@@ -132,12 +120,10 @@ def test_convert_transfers_every_weight_and_loads_via_peft(tmp_path):
 
 
 def test_convert_rejects_extra_trainable_by_default(tmp_path):
-    # Unfrozen base -> legacy save also stores base params -> conversion must refuse by default.
     legacy_dir = _build_legacy_checkpoint(tmp_path / "old", freeze=False)
     assert legacy_dir.exists()
     with pytest.raises(ValueError):
         convert_checkpoint(tmp_path / "old", tmp_path / "new")
-    # ...but allow_extra_trainable drops them and succeeds.
     manifest = convert_checkpoint(tmp_path / "old", tmp_path / "new2", allow_extra_trainable=True)
     assert manifest["num_params"] == 24
     assert len(manifest["skipped_keys"]) > 0
@@ -172,7 +158,6 @@ def test_convert_rejects_out_of_scope(tmp_path):
 
 
 def test_from_legacy_used_by_converter_is_consistent():
-    # Sanity: the converter's config mapping matches GaDRAConfig.from_legacy_peft_config directly.
     legacy_path = Path(_SOURCE_REPO) / "configs" / "peft_config.json"
     if not legacy_path.exists():
         pytest.skip("canonical legacy config not present")
