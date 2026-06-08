@@ -42,11 +42,11 @@ the repo root) so SLURM file-path wrappers keep working.
 |---|---|
 | `train.py` | single training entry for **all** methods — the adapter is chosen by the config's `method:` field (gadra \| gadra-mono \| gadra-soft \| lora) via an in-file method registry (add a baseline = one `@register`); standard `transformers.Trainer` |
 | `inference.py` | paper-repro eval entry — reads `config/inference.yaml`; `task: qa \| gsm8k \| mbpp` (deterministic) + `bbcqa \| tiebe` (GPT-judged Correct%) |
-| `processing.py` | data: tokenizer + EOS + FA2 `PackingCollator` (golden-tested, G2) |
-| `evaluation.py` | parsers + deterministic scorers (QA F1/EM, GSM8K EM, MBPP pass@1) + greedy runner + PPL (G3) + `GPTJudge` (BBC-QA / TiEBe Correct%, key from `OPENAI_API_KEY` env, not bit-exact) |
+| `processing.py` | data: tokenizer + EOS + FA2 `PackingCollator` (golden-tested) |
+| `evaluation.py` | parsers + deterministic scorers (QA F1/EM, GSM8K EM, MBPP pass@1) + greedy runner + PPL + `GPTJudge` (BBC-QA / TiEBe Correct%, key from `OPENAI_API_KEY` env, not bit-exact) |
 | `convert.py` | one-time legacy → peft-native checkpoint converter (`from examples.convert import convert_checkpoint`) |
 | `config/train.yaml` · `config/inference.yaml` | run-configs |
-| `config/deepspeed_zero2.yaml` | DeepSpeed ZeRO-2 for multi-GPU (copied verbatim from the paper's setup) |
+| `config/deepspeed_zero2.yaml` | DeepSpeed ZeRO-2 for multi-GPU |
 | `config/llama3.2-Instruct.jinja` | chat template (`--override chat_template_path=...`) |
 | `slurm/` | uv SLURM wrappers + a [submission walkthrough](slurm/README.md) (offline two-phase; train = multi-GPU accelerate+ZeRO-2, inference = single-GPU eval) |
 | `tests/` | the processing / evaluation / convert parity tests + their goldens (`pytest examples/tests/`) |

@@ -52,11 +52,9 @@ source examples/slurm/env.local.sh
 sbatch examples/slurm/train.slurm          # or examples/slurm/inference.slurm
 ```
 
-Why sourced and not baked into the scripts: `sbatch` reads `SBATCH_ACCOUNT` / `SBATCH_PARTITION` from the
-**submitting** shell and forwards the whole environment to the job by default — so one `source` covers both the
-scheduler knobs and the runtime vars (`GADRA_REPO`, `UV_*`, `OPENAI_API_KEY`, `CONFIG`, `ADAPTER`, …). The
-scripts resolve the repo root as `GADRA_REPO` → the dir you ran `sbatch` from → `$PWD`, and abort with a clear
-message if that isn't the repo, so submitting from the repo root works even without `GADRA_REPO` set.
+`sbatch` forwards the submitting shell's environment to the job, so one `source` covers both the scheduler
+knobs (`SBATCH_ACCOUNT` / `SBATCH_PARTITION`) and the runtime vars (`GADRA_REPO`, `UV_*`, `OPENAI_API_KEY`,
+`CONFIG`, `ADAPTER`). The scripts resolve the repo root from `GADRA_REPO` → the `sbatch` dir → `$PWD`.
 
 ## 2. Submit training
 
@@ -84,17 +82,16 @@ sbatch --gpus-per-node=4 examples/slurm/train.slurm
 - **Weights & Biases** (off by default): set `report_to: wandb` in [`train.yaml`](../config/train.yaml) and
   either fill `wandb_project` / `wandb_entity` there or export `WANDB_PROJECT` / `WANDB_ENTITY` before
   `sbatch` (they forward to the job). Run `uv run wandb login` once on the login node first.
-- **Output dir** mirrors the research repo's layout — `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/`, built by the
-  script (knobs `DATASET=BBC_news`, `EXP_NAME=GaDRA`, `DATE=$(date +%Y%m%d)`; e.g.
-  `EXP_NAME=GaDRA-Mono METHOD=gadra-mono sbatch …`). A re-run with the same dataset+date+exp_name
-  **overwrites** it (clean slate, like the original).
+- **Output dir** `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/`, built by the script (knobs `DATASET=BBC_news`,
+  `EXP_NAME=GaDRA`, `DATE=$(date +%Y%m%d)`; e.g. `EXP_NAME=GaDRA-Mono METHOD=gadra-mono sbatch …`). A re-run
+  with the same dataset+date+exp_name **overwrites** it (clean slate).
 - **GPU by default** — the script requests `--gpus-per-node=2` and trains on GPU (DeepSpeed `use_cpu: false`,
   one process per GPU); no extra step needed. Change the count with `sbatch --gpus-per-node=N`.
 
 ## 3. Submit inference
 
-**One job evaluates all the benchmarks listed in the config against one adapter** (like the research repo's
-`task_types` list), loads the model **once**, and prints a score summary to its `.out` log. The default config
+**One job evaluates all the benchmarks listed in the config against one adapter**, loads the model **once**,
+and prints a score summary to its `.out` log. The default config
 [`examples/config/inference.yaml`](../config/inference.yaml) is a **suite** that runs BBC QA + GSM8K + MBPP +
 TiEBe — you set the adapter **once** there:
 
@@ -124,7 +121,7 @@ ADAPTER=save/BBC_news/<DATE>/CPT/GaDRA CONFIG=examples/config/inference_bbcqa.ya
 `ADAPTER` (when set) also overrides the suite's adapter for all tasks. Or run fewer tasks by trimming the
 `tasks:` list in `inference.yaml` — the adapter still lives in exactly one place there.
 
-### Per-task settings (matches the research repo's `configs/eval_config/*.json`)
+### Per-task settings
 
 The suite stamps the shared `adapter` onto every task; each per-task config supplies its own eval file and the
 correct knobs. This table is the mapping (and the three footguns to avoid if you hand-edit a config):
@@ -154,13 +151,11 @@ tail -f slurm-logs/<jobid>.err               # errors
 ```
 
 - **Training** writes the adapter + tokenizer to `save/<DATASET>/<DATE>/CPT/<EXP_NAME>/` (the slurm job sets
-  this; the `out/gadra-bbc/` in `train.yaml` is only the default for a manual, non-SLURM run). A full copy of
-  the run log is `tee`'d into that dir as **`log.txt`** (same as the research repo): the resolved run-config,
-  the model structure, packed-example counts + sample rows, the Trainer's `***** Running training *****`
-  summary (num examples, per-device / global batch size, grad-accum, optimization steps, trainable params),
-  and the per-step losses. The `slurm-logs/<jobid>.{out,err}` files hold the same stream (plus launcher noise).
+  this; the `out/gadra-bbc/` in `train.yaml` is the default for a manual, non-SLURM run). A full copy of the
+  run log is `tee`'d into that dir as **`log.txt`** (run-config, model structure, sample rows, the Trainer's
+  `***** Running training *****` summary, per-step losses); `slurm-logs/<jobid>.{out,err}` hold the same stream.
 - **Inference** streams per-batch progress (`[gsm8k] generated 320/1319`), then a per-checkpoint summary to
-  the `.out` log, and **saves results to disk** (like the research repo). When `adapter` points at an
+  the `.out` log, and **saves results to disk**. When `adapter` points at an
   experiment ROOT, **every `checkpoint-N/` and the final adapter are evaluated in order** (model reloaded per
   checkpoint); point it at a single `checkpoint-N/` to run just one. Each (checkpoint, task) writes:
   ```
@@ -176,23 +171,14 @@ tail -f slurm-logs/<jobid>.err               # errors
     TiEBe    Correct=41.20% over ... samples (GPT judge: gpt-4.1-mini)
   ```
   (Numbers illustrative.) A failed task shows `FAILED: <reason>` and the job exits non-zero, but the rest run.
-  Greedy decoding uses the **dynamic KV cache by default** (fast, and bit-identical to the research repo's
-  static-cache output); set `cache_implementation: static` in a per-task config only to reproduce the repo's
-  verbatim (slower) generation knobs.
+  Greedy decoding uses the **dynamic KV cache by default** (fast, and bit-identical to the static-cache
+  output); set `cache_implementation: static` in a per-task config only for the verbatim (slower) knobs.
 
 ## Data
 
-Data is **not** shipped — you provide it. For SLURM the files must live on the **shared filesystem** (readable
-from the offline compute nodes); the simplest place is a `data/` dir inside `$GADRA_REPO` (it's gitignored), and
-config paths are relative to the repo root.
-
-- **CPT** — set `train_file` (+ optional `validation_file`) in [`../config/train.yaml`](../config/train.yaml);
-  format: one `{"text": "..."}` per line.
-- **Inference** — set `eval_file` (+ `documents_file` for `bbcqa`) in
-  [`../config/inference.yaml`](../config/inference.yaml); the paper's raw files work directly.
-
-Set the paths by editing the YAML, or add `--override train_file=...` / `--override eval_file=...` to the
-`examples.train` / `examples.inference` line in the script. Full format spec:
+Data is **not** shipped. For SLURM the files must live on the **shared filesystem** (readable from the offline
+compute nodes); the simplest place is a gitignored `data/` dir inside `$GADRA_REPO`. Set `train_file` /
+`eval_file` (+ `documents_file` for `bbcqa`) in the configs, or `--override` them. Formats + fields:
 [repo README → Data](../../README.md#data-you-provide-it).
 
 ## Troubleshooting

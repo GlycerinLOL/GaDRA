@@ -176,7 +176,7 @@ Per-task eval fields (`qa` / `gsm8k` / `mbpp` / `bbcqa` / `tiebe`) are documente
 `--override train_file=path.jsonl` / `--override eval_file=path.jsonl`.
 
 ```bash
-# Train — GaDRA CPT (single GPU). Variants: --override router_conditioning=mono | --override gate=soft
+# Train — GaDRA CPT (single GPU)
 uv run python -m examples.train --config examples/config/train.yaml
 
 # Train — multi-GPU (accelerate + DeepSpeed ZeRO-2). For N GPUs, hold the paper's global batch size 128 with
