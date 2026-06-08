@@ -10,7 +10,7 @@ import importlib.util
 
 from ._enum_shim import ensure_gadra_peft_type
 
-__version__ = "0.0.0.dev0"
+__version__ = "1.0.0"
 
 ensure_gadra_peft_type()
 from .config import GaDRAConfig  # noqa: E402  (must follow the enum shim)
