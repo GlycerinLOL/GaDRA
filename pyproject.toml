@@ -20,10 +20,12 @@ classifiers = [
 ]
 
 # peft==0.19.1 pinned: gadra._register enum-extension verified against this version.
-# transformers==5.10.2: transformers v5 requires peft>=0.18; MoE backbones require peft>=0.19.
+# transformers v5 requires peft>=0.18 (>=0.19 for MoE backbones). Capped at 5.7.0: transformers 5.8+
+# imports torch.float8_e8m0fnu unconditionally (needs torch>=2.7), which conflicts with the torch==2.6.0
+# pin the prebuilt flash-attn wheel requires (see [tool.uv]). 5.7.0 is the last minor without that ref.
 dependencies = [
     "torch>=2.4",
-    "transformers==5.10.2",
+    "transformers==5.7.0",
     "peft==0.19.1",
     "safetensors>=0.4",
 ]

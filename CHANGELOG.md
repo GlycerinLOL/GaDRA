@@ -7,11 +7,13 @@ All notable changes to GaDRA are documented in this file. The format is based on
 ## [Unreleased]
 
 ### Changed
-- Dependency upgrade for newest-model support: `transformers` 4.53.3 → 5.10.2 and `peft` 0.16.0 →
+- Dependency upgrade for newest-model support: `transformers` 4.53.3 → 5.7.0 and `peft` 0.16.0 →
   0.19.1 (torch floor 2.1 → 2.4). The `src/gadra` tuner needs no functional change — the peft
   custom-tuner registration path (`register_peft_method`, the `PeftType` enum shim, and the
   `BaseTuner` / `BaseTunerLayer` contract) is unchanged across these versions. transformers v5
-  requires peft ≥ 0.18; MoE backbones require peft ≥ 0.19.
+  requires peft ≥ 0.18; MoE backbones require peft ≥ 0.19. transformers is capped at 5.7.0 because
+  5.8+ imports `torch.float8_e8m0fnu` (torch ≥ 2.7), which conflicts with the `torch==2.6.0` pin the
+  prebuilt flash-attn wheel requires.
 
 ### Fixed
 - `examples/train.py`: dropped `TrainingArguments(overwrite_output_dir=...)` (removed in

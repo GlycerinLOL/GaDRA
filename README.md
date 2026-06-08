@@ -93,7 +93,7 @@ stays active (≈0.99) and <code>up_proj</code> high (≈0.88), while most <code
 
 Two entry points, by goal — **pick one**; they overlap (reproduction already includes the method).
 
-**A · Use GaDRA in your own project** — the method only (deps: `torch`, `transformers==5.10.2`,
+**A · Use GaDRA in your own project** — the method only (deps: `torch`, `transformers==5.7.0`,
 `peft==0.19.1`, `safetensors`; no data / eval / inference deps):
 
 ```bash
