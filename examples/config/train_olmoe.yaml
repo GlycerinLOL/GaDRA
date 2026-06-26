@@ -1,0 +1,60 @@
+# GaDRA block-parallel continual pre-training on an MoE backbone (OLMoE).
+# `python -m examples.train --config examples/config/train_olmoe.yaml`
+
+# --- Model + data ---
+model_name_or_path: allenai/OLMoE-1B-7B-0924
+train_file: data/BBC_news_alltime/Pretraining/v2-subset_5587/train_5587-eot.jsonl                 # JSONL {"text": ...} per line
+validation_file: data/BBC_news_alltime/Pretraining/v2-subset_5587/valid_5587-eot.jsonl          # optional; enables eval during training
+output_dir: out/gadra-olmoe-bbc                              # used directly for a manual (non-SLURM) run
+exp_name: GaDRA-Parallel                                     # SLURM save-dir label: save/<DATASET>/<DATE>/CPT/<exp_name>
+chat_template_path: null                                     # plain PT text; the backbone's chat template is unused here
+packing: fa2_collator                         # fa2_collator (needs FA2) | group (portable, SDPA)
+
+# --- Method ---
+method: gadra-parallel                         # gadra-parallel (gated) | lora-parallel (ungated baseline)
+
+# --- GaDRA block-parallel adapter ---
+r: 512
+lora_alpha: 512                               # scaling = alpha / r
+lora_dropout: 0.05
+parallel_modules: [mlp]                        # the MoE block attr to wrap (OLMoE/Mixtral: mlp; Granite/Phi: block_sparse_moe; Llama4: feed_forward)
+target_modules: []                             # block-parallel wraps the whole block, not per-projection
+# router_conditioning / gate come from the method preset. Uncomment to override:
+# router_conditioning: dual                   # dual (GaDRA) | mono (GaDRA-Mono)
+# gate: hard                                  # hard (Gumbel-STE) | soft | none (ungated LoRA-parallel)
+
+# --- Training recipe ---
+learning_rate: 3.0e-4
+warmup_ratio: 0.05
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+optim: adamw_torch
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 16                  # only used when validation_file is set
+gradient_accumulation_steps: 8                  # global batch = per_device_bs * grad_accum * N_GPUS
+max_seq_length: 1024
+weight_decay: 0.01
+max_grad_norm: 0.1
+bf16_full_eval: true
+average_tokens_across_devices: true             # token-weighted loss averaging; no-op single-GPU
+gradient_checkpointing: true
+gradient_checkpointing_use_reentrant: null      # null = library default; set false on a GC autograd error
+logging_steps: 1
+save_strategy: best                             # best | steps; best needs validation_file
+metric_for_best_model: loss
+save_steps: 100                                 # checkpoint cadence when save_strategy=steps
+save_total_limit: 1
+save_only_model: true                           # adapter only — no optimizer/scheduler state
+eval_steps: 100                                 # eval cadence; needs validation_file
+preprocessing_num_workers: 8
+seed: 42
+
+# --- Experiment tracking ---
+report_to: none                                 # none | wandb
+run_name: null                                  # null = basename of output_dir
+wandb_project: null                             # or set WANDB_PROJECT env var
+wandb_entity: null                              # or set WANDB_ENTITY env var
+
+# --- Smoke-run knobs ---
+max_steps: -1                                   # -1 = full run; set e.g. 20 for a smoke run
+max_train_samples: null                         # null = full corpus; set e.g. 4000 to subsample

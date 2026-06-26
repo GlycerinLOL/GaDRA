@@ -32,7 +32,7 @@ logger = logging.getLogger("gadra.train")
 PeftConfigBuilder = Callable[[Dict[str, Any], Dict[str, Any]], Any]
 
 # GaDRA-only adapter knobs (top-level cfg keys); setting any under method=lora is a config error.
-_GADRA_ONLY_KNOBS = ("router_conditioning", "gate", "gamma_threshold", "tau", "gate_bias_init")
+_GADRA_ONLY_KNOBS = ("router_conditioning", "gate", "gamma_threshold", "tau", "gate_bias_init", "parallel_modules")
 
 
 @dataclass(frozen=True)
@@ -74,12 +74,14 @@ def _knob(cfg: Dict[str, Any], preset: Dict[str, Any], key: str, fallback: Any) 
     return fallback
 
 
-def _shared(cfg: Dict[str, Any], preset: Dict[str, Any]) -> Dict[str, Any]:
+def _shared(cfg: Dict[str, Any], preset: Dict[str, Any], default_targets: Any = None) -> Dict[str, Any]:
     """LoRA-family fields shared across methods (r / dropout / target_modules)."""
+    if default_targets is None:
+        default_targets = ["up_proj", "gate_proj", "down_proj"]
     return dict(
         r=int(_knob(cfg, preset, "r", 512)),
         lora_dropout=float(_knob(cfg, preset, "lora_dropout", 0.05)),
-        target_modules=list(_knob(cfg, preset, "target_modules", ["up_proj", "gate_proj", "down_proj"])),
+        target_modules=list(_knob(cfg, preset, "target_modules", default_targets)),
     )
 
 
@@ -89,16 +91,23 @@ def _shared(cfg: Dict[str, Any], preset: Dict[str, Any]) -> Dict[str, Any]:
           summary="GaDRA-Mono: gate conditions on the delta only.")
 @register("gadra-soft", defaults={"router_conditioning": "dual", "gate": "soft"},
           summary="GaDRA-Soft: continuous (soft) gate.")
+@register("gadra-parallel", defaults={"router_conditioning": "dual", "gate": "hard", "parallel_modules": ["mlp"]},
+          summary="GaDRA on a whole MLP/MoE block (block-parallel; the MoE entry point).")
+@register("lora-parallel", defaults={"gate": "none", "parallel_modules": ["mlp"]},
+          summary="Ungated LoRA-parallel baseline on a whole MLP/MoE block.")
 def _build_gadra(cfg: Dict[str, Any], preset: Dict[str, Any]) -> Any:
     from gadra import GaDRAConfig  # importing the package also registers the "gadra" peft method
 
-    shared = _shared(cfg, preset)
+    parallel = _knob(cfg, preset, "parallel_modules", None)
+    # block-parallel targets the block via parallel_modules, not the per-projection default
+    shared = _shared(cfg, preset, default_targets=[] if parallel else None)
     return GaDRAConfig(
         **shared,
         # default lora_alpha = r => effective scale 1.0.
         lora_alpha=float(_knob(cfg, preset, "lora_alpha", shared["r"])),
         router_conditioning=_knob(cfg, preset, "router_conditioning", "dual"),
         gate=_knob(cfg, preset, "gate", "hard"),
+        parallel_modules=parallel,
         task_type="CAUSAL_LM",
     )
 

@@ -79,7 +79,10 @@ sbatch --gpus-per-node=4 examples/slurm/train.slurm
   It overrides the config's `method:` field, so one wrapper trains any shipped method (no file edit). The
   save-dir label is the config's `exp_name:` field — set it alongside `method:` to keep results tidy, or set the
   `EXP_NAME` env var to override it without editing the config. Use a different `CONFIG=...` to point at another
-  run-config entirely.
+  run-config entirely. **MoE / block-parallel**: `METHOD=gadra-parallel` (gated) or `METHOD=lora-parallel`
+  (ungated baseline) attach the adapter to a whole MLP/MoE block — submit with
+  `CONFIG=examples/config/train_olmoe.yaml sbatch examples/slurm/train.slurm` (set `parallel_modules:` to the
+  backbone's block name there: OLMoE/Mixtral `mlp`, Granite/Phi `block_sparse_moe`, Llama4 `feed_forward`).
 - **Weights & Biases** (off by default): set `report_to: wandb` in [`train.yaml`](../config/train.yaml) and
   either fill `wandb_project` / `wandb_entity` there or export `WANDB_PROJECT` / `WANDB_ENTITY` before
   `sbatch` (they forward to the job). Run `uv run wandb login` once on the login node first.

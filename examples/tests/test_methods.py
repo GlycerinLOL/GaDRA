@@ -37,6 +37,15 @@ def test_gadra_presets(method, router, gate):
     assert pc.gate == gate
 
 
+@pytest.mark.parametrize("method,gate", [("gadra-parallel", "hard"), ("lora-parallel", "none")])
+def test_parallel_presets_build_block_parallel_gadra(method, gate):
+    pc = build_peft_config(dict(r=8, method=method))  # no target_modules -> block-parallel default
+    assert type(pc).__name__ == "GaDRAConfig"
+    assert list(pc.parallel_modules) == ["mlp"]
+    assert pc.gate == gate
+    assert pc.target_modules == []
+
+
 def test_shared_adapter_fields_are_faithful():
     pc = build_peft_config(_base(method="gadra"))
     assert pc.r == 512
@@ -94,7 +103,7 @@ def test_lora_forwards_native_peft_knobs():
     assert build_peft_config(_base(method="lora", lora_bias=True)).lora_bias is True
 
 
-@pytest.mark.parametrize("knob", ["router_conditioning", "gate", "gamma_threshold", "tau", "gate_bias_init"])
+@pytest.mark.parametrize("knob", ["router_conditioning", "gate", "gamma_threshold", "tau", "gate_bias_init", "parallel_modules"])
 def test_lora_rejects_gadra_only_knobs(knob):
     with pytest.raises(ValueError, match="GaDRA-only"):
         build_peft_config(_base(method="lora", **{knob: "x"}))

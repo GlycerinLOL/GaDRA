@@ -19,7 +19,8 @@ See the repo [README → Installation](../README.md#installation) for prerequisi
 ```bash
 # Training — the adapter is chosen by the config's `method:` field (default: gadra)
 uv run python -m examples.train --config examples/config/train.yaml
-#   variants: --override method=gadra-mono | --override method=gadra-soft | --override method=lora
+#   variants: --override method=gadra-mono|gadra-soft|lora
+#   MoE / block-parallel (attach to a whole MLP/MoE block): method=gadra-parallel|lora-parallel — see examples/config/train_olmoe.yaml
 
 # Inference / paper-repro eval (task: qa | gsm8k | mbpp; deterministic metrics)
 uv run python -m examples.inference --config examples/config/inference.yaml
@@ -64,7 +65,7 @@ the repo root) so SLURM file-path wrappers keep working.
 
 | Path | What |
 |---|---|
-| `train.py` | single training entry for **all** methods — the adapter is chosen by the config's `method:` field (gadra \| gadra-mono \| gadra-soft \| lora) via an in-file method registry (add a baseline = one `@register`); standard `transformers.Trainer` |
+| `train.py` | single training entry for **all** methods — the adapter is chosen by the config's `method:` field (gadra \| gadra-mono \| gadra-soft \| lora \| gadra-parallel \| lora-parallel) via an in-file method registry (add a baseline = one `@register`); standard `transformers.Trainer` |
 | `inference.py` | paper-repro eval entry — reads `config/inference.yaml`; `task: qa \| gsm8k \| mbpp` (deterministic) + `bbcqa \| tiebe` (GPT-judged Correct%) |
 | `processing.py` | data: tokenizer + EOS + FA2 `PackingCollator` (golden-tested) |
 | `evaluation.py` | parsers + deterministic scorers (QA F1/EM, GSM8K EM, MBPP pass@1) + greedy runner + PPL + `GPTJudge` (BBC-QA / TiEBe Correct%, key from `OPENAI_API_KEY` env, not bit-exact) |
