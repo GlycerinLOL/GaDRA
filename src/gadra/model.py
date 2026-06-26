@@ -11,11 +11,11 @@ import warnings
 import torch
 from torch import nn
 
-from peft.tuners.tuners_utils import BaseTuner, BaseTunerLayer, check_target_module_exists
+from peft.tuners.tuners_utils import BaseTuner, BaseTunerLayer, _ExcludedModule, check_target_module_exists
 from peft.utils.other import AuxiliaryTrainingWrapper, get_pattern_key
 
 from .config import DEFAULT_TARGET_MODULES
-from .layer import GaDRALinear
+from .layer import GaDRALinear, GaDRAParallelBlock
 
 
 class GaDRAModel(BaseTuner):
@@ -33,7 +33,15 @@ class GaDRAModel(BaseTuner):
 
     @staticmethod
     def _check_target_module_exists(gadra_config, key):
-        return check_target_module_exists(gadra_config, key)
+        matched = check_target_module_exists(gadra_config, key)
+        if matched or isinstance(matched, _ExcludedModule):
+            return matched
+        parallel = getattr(gadra_config, "parallel_modules", None)
+        if parallel:
+            names = [parallel] if isinstance(parallel, str) else parallel
+            if key in names or any(key.endswith(f".{name}") for name in names):
+                return True
+        return matched
 
     @staticmethod
     def _prepare_adapter_config(peft_config, model_config):
@@ -72,23 +80,42 @@ class GaDRAModel(BaseTuner):
             "init_lora_weights": gadra_config.init_lora_weights,
         }
 
-        if isinstance(target, GaDRALinear):
+        if isinstance(target, (GaDRALinear, GaDRAParallelBlock)):
             target.update_layer(adapter_name, **kwargs)
         else:
-            new_module = self._create_new_module(gadra_config, adapter_name, target, **kwargs)
+            new_module = self._create_new_module(gadra_config, adapter_name, target, current_key, **kwargs)
             if adapter_name not in self.active_adapters:
                 new_module.requires_grad_(False)
             self._replace_module(parent, target_name, new_module, target)
 
-    @staticmethod
-    def _create_new_module(gadra_config, adapter_name, target, **kwargs):
+    def _create_new_module(self, gadra_config, adapter_name, target, current_key, **kwargs):
         base_layer = target.get_base_layer() if isinstance(target, BaseTunerLayer) else target
-        if not isinstance(base_layer, nn.Linear):
-            raise ValueError(
-                f"GaDRA only supports `torch.nn.Linear` target modules, but got {type(base_layer).__name__} "
-                f"for an entry in `target_modules`. Restrict `target_modules` to linear projections."
-            )
-        return GaDRALinear(target, adapter_name, **kwargs)
+        if isinstance(base_layer, nn.Linear):
+            return GaDRALinear(target, adapter_name, **kwargs)
+        # non-Linear match -> whole-block parallel adapter (e.g. an MLP/MoE block)
+        parallel = getattr(gadra_config, "parallel_modules", None)
+        if parallel is not None:
+            names = [parallel] if isinstance(parallel, str) else parallel
+            if not (current_key in names or any(current_key.endswith(f".{name}") for name in names)):
+                raise ValueError(
+                    f"GaDRA matched non-Linear module {current_key!r} ({type(base_layer).__name__}); add it to "
+                    "`parallel_modules` to wrap it as a block-parallel adapter, or restrict `target_modules` to "
+                    "linear projections."
+                )
+        return GaDRAParallelBlock(target, adapter_name, hidden_size=self._resolve_hidden_size(base_layer), **kwargs)
+
+    def _resolve_hidden_size(self, base_layer) -> int:
+        model_config = getattr(getattr(self, "model", None), "config", None)
+        h = getattr(model_config, "hidden_size", None)
+        if isinstance(h, int) and h > 0:
+            return h
+        for module in base_layer.modules():
+            if isinstance(module, nn.Linear):
+                return module.in_features
+        raise ValueError(
+            "could not resolve hidden_size for a block-parallel target: the base model exposes no "
+            "config.hidden_size and the block has no nn.Linear to probe."
+        )
 
     def _replace_module(self, parent, child_name, new_module, child):
         setattr(parent, child_name, new_module)
@@ -147,7 +174,7 @@ class GaDRAModel(BaseTuner):
     def set_adapter(self, adapter_name: str | list[str], inference_mode: bool = False) -> None:
         """Set the active adapter(s) and mark them trainable."""
         for module in self.model.modules():
-            if isinstance(module, GaDRALinear):
+            if isinstance(module, (GaDRALinear, GaDRAParallelBlock)):
                 if module.merged:
                     warnings.warn("Adapter cannot be set when the model is merged. Unmerging the model first.")
                     module.unmerge()

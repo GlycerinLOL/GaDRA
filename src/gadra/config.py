@@ -22,7 +22,7 @@ ensure_gadra_peft_type()
 DEFAULT_TARGET_MODULES = ["up_proj", "gate_proj", "down_proj"]
 
 ROUTER_CONDITIONING_CHOICES = ("dual", "mono")
-GATE_CHOICES = ("hard", "soft")
+GATE_CHOICES = ("hard", "soft", "none")
 
 # Legacy nested-config fields the converter ingests and drops.
 _LEGACY_TOP_LEVEL_DROP = frozenset(
@@ -59,7 +59,8 @@ class GaDRAConfig(PeftConfig):
             ``r`` (effective scale 1.0).
         lora_dropout: Dropout applied to the adapter input and, separately, to the gate input.
         router_conditioning: ``"dual"`` (gate sees ``[y0; delta]``) or ``"mono"`` (gate sees ``delta``).
-        gate: ``"hard"`` (Gumbel-sigmoid STE) or ``"soft"`` (continuous).
+        gate: ``"hard"`` (Gumbel-sigmoid STE), ``"soft"`` (continuous), or ``"none"`` (ungated,
+            ``gamma=1``; block-parallel LoRA baseline).
         gamma_threshold: Decision threshold for the hard gate.
         tau: Gumbel-sigmoid temperature.
         gate_bias_init: Initial value for the gate bias; ``None`` = default ``nn.Linear`` init.
@@ -68,6 +69,8 @@ class GaDRAConfig(PeftConfig):
         init_lora_weights: ``True`` = A kaiming, B zeros (delta 0 at start); ``False`` = default
             ``nn.Linear`` init (random B). Bool only.
         exclude_modules: Module name(s) to exclude from ``target_modules``.
+        parallel_modules: Module name(s) wrapped as a whole-block parallel adapter (``A: H->r``,
+            ``B: r->H``, gated, added parallel to the block output) — for MLP/MoE blocks. Non-mergeable.
 
     ``target_modules`` is kept as an ordered ``list``; ``layers_to_transform`` / ``layers_pattern``
     are unsupported.
@@ -104,13 +107,20 @@ class GaDRAConfig(PeftConfig):
     exclude_modules: Optional[Union[list[str], str]] = field(
         default=None, metadata={"help": "peft-standard module name(s) to exclude from target_modules."}
     )
+    parallel_modules: Optional[Union[list[str], str]] = field(
+        default=None,
+        metadata={"help": "Module name(s) to wrap as a whole-block parallel adapter (e.g. ['mlp'] for an "
+                          "MLP/MoE block): A: H->r, B: r->H, gated, added parallel to the block output. "
+                          "Non-mergeable. When None, any matched non-Linear target is auto-wrapped block-parallel."},
+    )
 
     def __post_init__(self):
         super().__post_init__()
         self.peft_type = PeftType.GADRA
 
         if self.target_modules is None:
-            self.target_modules = list(DEFAULT_TARGET_MODULES)
+            # block-parallel requests target the block via parallel_modules, not the per-projection default
+            self.target_modules = [] if self.parallel_modules else list(DEFAULT_TARGET_MODULES)
 
         if self.router_conditioning not in ROUTER_CONDITIONING_CHOICES:
             raise ValueError(

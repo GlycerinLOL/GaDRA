@@ -66,6 +66,11 @@ model = PeftModel.from_pretrained(base, "out/")
 model.generate(...)
 ```
 
+**MoE / block-parallel targets.** To attach GaDRA in parallel to a whole MLP or MoE block (instead of
+per-projection), name the block in `parallel_modules` — e.g. `GaDRAConfig(parallel_modules=["mlp"], r=512)`.
+This is the entry point for MoE backbones (fused experts expose no per-projection `nn.Linear`); `gate="none"`
+gives an ungated LoRA-parallel baseline. Also non-mergeable.
+
 ## Method
 
 <p align="center">

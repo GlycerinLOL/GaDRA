@@ -57,9 +57,17 @@ return base_out + gamma * delta                           # γ is a per-token sc
 `GaDRAConfig(PeftConfig)` is flat (the paper uses uniform settings across the three projections):
 LoRA-style `r` / `lora_alpha` / `lora_dropout` / `target_modules` (+ optional peft-standard
 `rank_pattern` / `alpha_pattern` / `exclude_modules`), plus the GaDRA fields
-`router_conditioning ∈ {dual, mono}`, `gate ∈ {hard, soft}`, `gamma_threshold`, `tau`,
+`router_conditioning ∈ {dual, mono}`, `gate ∈ {hard, soft, none}`, `gamma_threshold`, `tau`,
 `gate_bias_init`. `from_legacy_peft_config` ingests a legacy nested config and drops the
 regularizer / analysis / out-of-scope-variant fields (used by the converter).
+
+**Block-parallel targets (`parallel_modules`).** Linear `target_modules` are wrapped per-projection
+(`GaDRALinear`). Naming a whole block instead — e.g. `parallel_modules=["mlp"]` for an MLP or MoE
+block — wraps it with `GaDRAParallelBlock`: a gated low-rank residual at the block's I/O dim `H`
+(`A: H→r`, `B: r→H`), added parallel to the block output (`y = block(x) + γ·δ`; tuple-returning MoE
+blocks supported). This is the entry point for MoE backbones, whose fused experts expose no
+per-projection `nn.Linear`. Same gate as the per-projection path; `gate="none"` is the ungated
+LoRA-parallel baseline. Also non-mergeable.
 
 ## Registration
 
@@ -108,7 +116,7 @@ examples/                   # repo-only reproduction tooling (NOT in the wheel)
 tests/                      # method purity / parity / independence goldens
 ```
 
-Out of scope (stays in the research repo): MoE / whole-MLP wrappers, attention-only variants,
+Out of scope (stays in the research repo): attention-only variants,
 alternate router/init variants (`Add`, `svd_minor`, relu/tanh), the manual `gate_layers` /
 `peft_layers` DSL (the per-layer activation budget is *learned*), and the per-token analysis tooling
 (CR/γ extraction, gate-override interventions, regularizer losses, score notebooks).
